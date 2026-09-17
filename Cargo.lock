@@ -6253,6 +6253,7 @@ dependencies = [
 [[package]]
 name = "q_term"
 version = "0.1.0"
+source = "git+https://github.com/cubething-qproj/q_term#f8da3c13a7818973e40827b3e2664e748b387f76"
 dependencies = [
  "anstyle-parse",
  "bevy 0.19.0",
