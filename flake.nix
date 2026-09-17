@@ -93,6 +93,7 @@
         mkShell = {
           toolchain ? rustToolchain,
           extraPackages ? [],
+          extraShellHook ? "",
         }:
           pkgs.mkShell {
             nativeBuildInputs = [pkgs.pkg-config];
@@ -119,6 +120,8 @@
               if [ -f ".env.local" ]; then
                 source ".env.local"
               fi
+
+              ${extraShellHook}
             '';
 
             LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath linuxDeps;
@@ -149,6 +152,9 @@
         devShells.ci = mkShell {
           toolchain = rustToolchainCi;
           extraPackages = ciPackages;
+          extraShellHook = ''
+            export CARGO_PROFILE_DEV_DEBUG=0
+          '';
         };
         devShells.ci-coverage = mkShell {
           toolchain = rustToolchainCi;
