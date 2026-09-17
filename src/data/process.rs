@@ -35,6 +35,8 @@ impl Programs {
 
 /// Data associated with a [`Program`]. Specifically, [`SystemId`]s mapped to [`ScheduleLabel`]s.
 /// Note that this currently only accepts **one** system per label.
+// TODO: Store schedules rather than individual systems so a program phase can
+// contain multiple ordered systems.
 pub type ProgramData = HashMap<InternedScheduleLabel, SystemId<In<Entity>, ()>>;
 
 /// Type alias for a [`System`] associated with a [`Program`].
@@ -49,13 +51,13 @@ define_label!(
     ProgramLabel,
     PROGRAM_LABEL_INTERNER,
     extra_methods: {
-        /// Name of the process, used to run it on the command line.
-        fn name(&self) -> ProcessName;
+        /// Name of the program, used to run it on the command line.
+        fn name(&self) -> ProgramName;
     },
     extra_methods_impl: {
-        /// Name of the process, used to run it on the command line.
-        fn name(&self) -> ProcessName {
-            ProcessName::new("PLACEHOLDER").unwrap()
+        /// Name of the program, used to run it on the command line.
+        fn name(&self) -> ProgramName {
+            ProgramName::new("PLACEHOLDER").unwrap()
         }
     }
 );
@@ -81,8 +83,8 @@ pub trait Program {
 macro_rules! impl_program_label {
     ($t:ty, $name:literal) => {
         impl ProgramLabel for $t {
-            fn name(&self) -> ProcessName {
-                ProcessName::new($name).unwrap()
+            fn name(&self) -> ProgramName {
+                ProgramName::new($name).unwrap()
             }
             fn dyn_clone(&self) -> Box<dyn ProgramLabel> {
                 Box::new(self.clone())
@@ -115,14 +117,14 @@ pub struct Process {
     /// stderr
     pub fd2: Entity,
 }
-/// The name of a [`Process`]. This type exists to ensure validity on construction.
-/// In particular, process names must not contain whitespace.
+/// The name of a [`Program`]. This type exists to ensure validity on construction.
+/// In particular, program names must not contain whitespace.
 #[derive(Debug, Deref)]
-pub struct ProcessName(&'static str);
-impl ProcessName {
+pub struct ProgramName(&'static str);
+impl ProgramName {
     pub fn new(name: &'static str) -> Result<Self, &'static str> {
         if name.split_whitespace().count() > 1 {
-            Err("Process name must not contain whitespace.")
+            Err("Program name must not contain whitespace.")
         } else {
             Ok(Self(name))
         }
@@ -146,7 +148,7 @@ impl ProgramAppExt for App {
     fn register_program(&mut self, prog: impl ProgramLabel) {
         self.world_mut().init_resource::<Programs>();
         let mut progs = self.world_mut().resource_mut::<Programs>();
-        progs.0.insert(prog.intern(), ProgramData::default());
+        progs.0.entry(prog.intern()).or_default();
         trace!("Registered program {:?}", prog,);
         trace!("Programs: {:#?}", progs)
     }
