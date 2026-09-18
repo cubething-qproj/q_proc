@@ -17,6 +17,7 @@ pub struct ProcessPlugin;
 impl Plugin for ProcessPlugin {
     fn build(&self, app: &mut App) {
         use crate::systems::prog::*;
+        app.init_resource::<Programs>();
         app.add_message::<SignalMsg>();
         app.add_message::<StdOut>();
         app.add_message::<StdErr>();
