@@ -1,6 +1,6 @@
 # q_proc
 
-TODO: one-line description.
+Process abstraction for bevy.
 
 ## License
 
