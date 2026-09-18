@@ -1,5 +1,7 @@
 use crate::prelude::*;
 
+mod terminal;
+
 #[derive(Resource)]
 struct ExpectedTarget(Entity);
 

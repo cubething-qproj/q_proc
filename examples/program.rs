@@ -3,8 +3,8 @@
 //! Spawns a `Process` directly (no `Shell`) and writes to its `fd1`
 //! every second. The terminal display is provided by `q_term`.
 
-use bevy::prelude::*;
 use bevy::platform::collections::HashMap;
+use bevy::prelude::*;
 use bevy::window::WindowResolution;
 use bevy_inspector_egui::bevy_egui::EguiPlugin;
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
@@ -39,7 +39,7 @@ fn main() {
         Update,
         |id: In<Entity>,
          procs: Query<&Process>,
-         mut writer: MessageWriter<StdOut>,
+         mut writer: MessageWriter<TermStdOut>,
          mut timer: Local<Option<Timer>>,
          time: Res<Time>| {
             let proc = procs.get(*id).unwrap();
@@ -51,7 +51,11 @@ fn main() {
             if t.just_finished() {
                 let msg = format!("Hello from process {}!\n", *id);
                 info!(msg);
-                writer.write(StdOut::write(proc.fd1, msg));
+                writer.write(TermStdOut {
+                    term: proc.fd1,
+                    from: *id,
+                    message: vec![TermWrite::new(msg)],
+                });
             }
         },
     );
@@ -73,13 +77,16 @@ fn setup(mut commands: Commands) {
         VtUi::new(term_id),
     ));
     // Spawn the process directly, wired to the terminal for stdio.
-    commands.spawn(Process {
-        prog: MyProg.intern(),
-        signal_overrides: HashMap::new(),
-        argv: Vec::new(),
-        environ: HashMap::new(),
-        fd0: term_id,
-        fd1: term_id,
-        fd2: term_id,
-    });
+    commands.spawn((
+        Process {
+            prog: MyProg.intern(),
+            signal_overrides: HashMap::new(),
+            argv: Vec::new(),
+            environ: HashMap::new(),
+            fd0: term_id,
+            fd1: term_id,
+            fd2: term_id,
+        },
+        VtForegroundProcess::new(term_id),
+    ));
 }
