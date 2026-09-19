@@ -70,6 +70,7 @@ impl RegisterIoAppExt for App {
 
 /// A runtime-typed reference to one registered I/O capability on an entity.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Reflect)]
+#[reflect(opaque)]
 pub struct IoHandle {
     entity: Entity,
     component: TypeId,
@@ -156,15 +157,34 @@ impl ProcessWriteMsg {
 
 /// A process write whose descriptor has been resolved to an endpoint.
 #[derive(Message, Clone, Debug, Reflect)]
+#[reflect(opaque)]
 pub struct EndpointWriteMsg {
-    /// Process that requested the write.
-    pub process: Entity,
-    /// Descriptor through which the process wrote.
-    pub fd: FileDescriptor,
-    /// Resolved endpoint capability.
-    pub endpoint: IoHandle,
-    /// Uninterpreted bytes to write.
-    pub bytes: Vec<u8>,
+    process: Entity,
+    fd: FileDescriptor,
+    endpoint: IoHandle,
+    bytes: Vec<u8>,
+}
+
+impl EndpointWriteMsg {
+    /// Returns the process that requested the write.
+    pub const fn process(&self) -> Entity {
+        self.process
+    }
+
+    /// Returns the descriptor through which the process wrote.
+    pub const fn fd(&self) -> FileDescriptor {
+        self.fd
+    }
+
+    /// Returns the resolved endpoint capability.
+    pub const fn endpoint(&self) -> IoHandle {
+        self.endpoint
+    }
+
+    /// Returns the uninterpreted bytes to write.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
 }
 
 /// Bytes made available to one process descriptor by an endpoint adapter.

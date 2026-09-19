@@ -1,5 +1,7 @@
 use std::any::TypeId;
 
+use bevy::reflect::{FromReflect, PartialReflect, ReflectRef, structs::DynamicStruct};
+
 use crate::prelude::*;
 
 #[derive(Component)]
@@ -76,6 +78,28 @@ fn handles_select_one_capability_on_a_multi_capability_entity() {
     assert_eq!(first.entity(), second.entity());
     assert_eq!(first.component_type_id(), TypeId::of::<FirstEndpoint>());
     assert_eq!(second.component_type_id(), TypeId::of::<SecondEndpoint>());
+}
+
+#[test]
+fn handles_and_routed_writes_are_opaque_to_reflection() {
+    let mut app = App::new();
+    app.register_io_component::<FirstEndpoint>();
+    let endpoint = app.world_mut().spawn(FirstEndpoint).id();
+    let handle = endpoint_handle(&mut app, endpoint);
+
+    assert!(matches!(handle.reflect_ref(), ReflectRef::Opaque(_)));
+
+    let mut forged_handle = DynamicStruct::default();
+    forged_handle.insert("entity", endpoint);
+    forged_handle.insert("component", TypeId::of::<FirstEndpoint>());
+    assert!(IoHandle::from_reflect(&forged_handle).is_none());
+
+    let mut forged_write = DynamicStruct::default();
+    forged_write.insert("process", endpoint);
+    forged_write.insert("fd", FileDescriptor::STDOUT);
+    forged_write.insert("endpoint", handle);
+    forged_write.insert("bytes", b"forged".to_vec());
+    assert!(EndpointWriteMsg::from_reflect(&forged_write).is_none());
 }
 
 #[test]
