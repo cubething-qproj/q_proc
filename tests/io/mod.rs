@@ -1,8 +1,20 @@
 use std::any::TypeId;
 
-use bevy::reflect::{FromReflect, PartialReflect, ReflectRef, structs::DynamicStruct};
+use bevy::{
+    platform::collections::HashMap,
+    reflect::{FromReflect, PartialReflect, ReflectRef, structs::DynamicStruct},
+};
 
 use crate::prelude::*;
+
+mod input;
+mod lifecycle;
+mod routing;
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+struct IoProgram;
+
+q_proc::impl_program_label!(IoProgram, "io-program");
 
 #[derive(Component)]
 struct FirstEndpoint;
@@ -22,6 +34,39 @@ fn endpoint_handle(app: &mut App, entity: Entity) -> IoHandle {
         .resource::<IoComponentCache>()
         .handle::<FirstEndpoint>(entity, &endpoints)
         .expect("the registered component on the entity should produce a handle")
+}
+
+fn first_endpoint(app: &mut App) -> (Entity, IoHandle) {
+    let endpoint = app.world_mut().spawn(FirstEndpoint).id();
+    let handle = endpoint_handle(app, endpoint);
+    (endpoint, handle)
+}
+
+fn spawn_io_process(app: &mut App, descriptors: &[(FileDescriptor, IoHandle)]) -> Entity {
+    let stdio = descriptors.first().map_or_else(
+        || app.world_mut().spawn_empty().id(),
+        |(_, handle)| handle.entity(),
+    );
+    let mut table = ProcessFdTable::default();
+    for (fd, handle) in descriptors {
+        table.set(*fd, *handle);
+    }
+
+    app.world_mut()
+        .spawn((
+            Process {
+                prog: IoProgram.intern(),
+                signal_overrides: HashMap::new(),
+                argv: Vec::new(),
+                environ: HashMap::new(),
+                fd0: stdio,
+                fd1: stdio,
+                fd2: stdio,
+            },
+            table,
+            ProcessInputBuffer::default(),
+        ))
+        .id()
 }
 
 #[test]

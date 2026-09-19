@@ -49,6 +49,10 @@ impl IoComponentCache {
             component: TypeId::of::<T>(),
         })
     }
+
+    pub(crate) fn contains(&self, component: TypeId) -> bool {
+        self.0.contains(&component)
+    }
 }
 
 /// Registers component types that may act as I/O endpoint capabilities.
@@ -166,6 +170,20 @@ pub struct EndpointWriteMsg {
 }
 
 impl EndpointWriteMsg {
+    pub(crate) fn new(
+        process: Entity,
+        fd: FileDescriptor,
+        endpoint: IoHandle,
+        bytes: Vec<u8>,
+    ) -> Self {
+        Self {
+            process,
+            fd,
+            endpoint,
+            bytes,
+        }
+    }
+
     /// Returns the process that requested the write.
     pub const fn process(&self) -> Entity {
         self.process
@@ -220,5 +238,9 @@ impl ProcessInputBuffer {
     /// Removes and yields all currently buffered bytes for `fd`.
     pub fn drain(&mut self, fd: FileDescriptor) -> impl Iterator<Item = u8> {
         self.queues.remove(&fd).unwrap_or_default().into_iter()
+    }
+
+    pub(crate) fn append(&mut self, fd: FileDescriptor, bytes: impl IntoIterator<Item = u8>) {
+        self.queues.entry(fd).or_default().extend(bytes);
     }
 }
