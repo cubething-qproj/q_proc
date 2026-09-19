@@ -1,0 +1,204 @@
+//! Process-local descriptors and endpoint-neutral I/O messages.
+
+use std::{any::TypeId, collections::VecDeque};
+
+use bevy::platform::collections::{HashMap, HashSet};
+use thiserror::Error;
+
+use crate::prelude::*;
+
+/// A process-local file descriptor number.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Reflect)]
+pub struct FileDescriptor(u16);
+
+impl FileDescriptor {
+    /// Standard input.
+    pub const STDIN: Self = Self(0);
+    /// Standard output.
+    pub const STDOUT: Self = Self(1);
+    /// Standard error.
+    pub const STDERR: Self = Self(2);
+
+    /// Creates a file descriptor from its process-local number.
+    pub const fn new(number: u16) -> Self {
+        Self(number)
+    }
+
+    /// Returns the process-local descriptor number.
+    pub const fn number(self) -> u16 {
+        self.0
+    }
+}
+
+/// Implemented by component types that make an entity I/O-capable.
+pub trait IoComponent: Component {}
+
+/// Registered component types that may be selected by an [`IoHandle`].
+#[derive(Resource, Debug, Default)]
+pub struct IoComponentCache(HashSet<TypeId>);
+
+impl IoComponentCache {
+    /// Creates a handle when `T` is registered and `entity` currently carries it.
+    pub fn handle<T: IoComponent>(
+        &self,
+        entity: Entity,
+        endpoints: &Query<(), With<T>>,
+    ) -> Option<IoHandle> {
+        (self.0.contains(&TypeId::of::<T>()) && endpoints.contains(entity)).then_some(IoHandle {
+            entity,
+            component: TypeId::of::<T>(),
+        })
+    }
+}
+
+/// Registers component types that may act as I/O endpoint capabilities.
+pub trait RegisterIoAppExt {
+    /// Registers `T` as an I/O endpoint capability.
+    fn register_io_component<T: IoComponent>(&mut self) -> &mut Self;
+}
+
+impl RegisterIoAppExt for App {
+    fn register_io_component<T: IoComponent>(&mut self) -> &mut Self {
+        self.init_resource::<IoComponentCache>();
+        self.world_mut()
+            .resource_mut::<IoComponentCache>()
+            .0
+            .insert(TypeId::of::<T>());
+        self
+    }
+}
+
+/// A runtime-typed reference to one registered I/O capability on an entity.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Reflect)]
+pub struct IoHandle {
+    entity: Entity,
+    component: TypeId,
+}
+
+impl IoHandle {
+    /// Returns the endpoint entity.
+    pub const fn entity(self) -> Entity {
+        self.entity
+    }
+
+    /// Returns the component type selected as the endpoint capability.
+    pub const fn component_type_id(self) -> TypeId {
+        self.component
+    }
+}
+
+/// An error returned when an operation requires an open file descriptor.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[error("file descriptor {0:?} is not open")]
+pub struct BadFd(pub FileDescriptor);
+
+/// The mutable file descriptor table for one process.
+#[derive(Component, Clone, Debug, Default, Reflect)]
+pub struct ProcessFdTable {
+    descriptors: HashMap<FileDescriptor, IoHandle>,
+}
+
+impl ProcessFdTable {
+    /// Returns the endpoint assigned to `fd`.
+    pub fn get(&self, fd: FileDescriptor) -> Option<IoHandle> {
+        self.descriptors.get(&fd).copied()
+    }
+
+    /// Assigns `handle` to `fd`, returning the previous endpoint if present.
+    pub fn set(&mut self, fd: FileDescriptor, handle: IoHandle) -> Option<IoHandle> {
+        self.descriptors.insert(fd, handle)
+    }
+
+    /// Closes `fd`, returning its previous endpoint if present.
+    pub fn close(&mut self, fd: FileDescriptor) -> Option<IoHandle> {
+        self.descriptors.remove(&fd)
+    }
+
+    /// Assigns `to` to the same endpoint as `from`.
+    pub fn duplicate(&mut self, from: FileDescriptor, to: FileDescriptor) -> Result<(), BadFd> {
+        let handle = self.get(from).ok_or(BadFd(from))?;
+        self.set(to, handle);
+        Ok(())
+    }
+}
+
+/// A write requested by a program through one of its descriptors.
+#[derive(Message, Clone, Debug, Reflect)]
+pub struct ProcessWriteMsg {
+    /// Process requesting the write.
+    pub process: Entity,
+    /// Descriptor through which to write.
+    pub fd: FileDescriptor,
+    /// Uninterpreted bytes to write.
+    pub bytes: Vec<u8>,
+}
+
+impl ProcessWriteMsg {
+    /// Creates a process write through `fd`.
+    pub fn new(process: Entity, fd: FileDescriptor, bytes: impl Into<Vec<u8>>) -> Self {
+        Self {
+            process,
+            fd,
+            bytes: bytes.into(),
+        }
+    }
+
+    /// Creates a standard-output write.
+    pub fn stdout(process: Entity, bytes: impl Into<Vec<u8>>) -> Self {
+        Self::new(process, FileDescriptor::STDOUT, bytes)
+    }
+
+    /// Creates a standard-error write.
+    pub fn stderr(process: Entity, bytes: impl Into<Vec<u8>>) -> Self {
+        Self::new(process, FileDescriptor::STDERR, bytes)
+    }
+}
+
+/// A process write whose descriptor has been resolved to an endpoint.
+#[derive(Message, Clone, Debug, Reflect)]
+pub struct EndpointWriteMsg {
+    /// Process that requested the write.
+    pub process: Entity,
+    /// Descriptor through which the process wrote.
+    pub fd: FileDescriptor,
+    /// Resolved endpoint capability.
+    pub endpoint: IoHandle,
+    /// Uninterpreted bytes to write.
+    pub bytes: Vec<u8>,
+}
+
+/// Bytes made available to one process descriptor by an endpoint adapter.
+#[derive(Message, Clone, Debug, Reflect)]
+pub struct ProcessInputMsg {
+    /// Process receiving the bytes.
+    pub process: Entity,
+    /// Descriptor receiving the bytes.
+    pub fd: FileDescriptor,
+    /// Endpoint capability that supplied the bytes.
+    pub endpoint: IoHandle,
+    /// Uninterpreted input bytes.
+    pub bytes: Vec<u8>,
+}
+
+/// Process-local input queues populated before program execution.
+#[derive(Component, Clone, Debug, Default, Reflect)]
+pub struct ProcessInputBuffer {
+    queues: HashMap<FileDescriptor, VecDeque<u8>>,
+}
+
+impl ProcessInputBuffer {
+    /// Returns the number of buffered bytes for `fd`.
+    pub fn len(&self, fd: FileDescriptor) -> usize {
+        self.queues.get(&fd).map_or(0, VecDeque::len)
+    }
+
+    /// Returns whether `fd` has no buffered bytes.
+    pub fn is_empty(&self, fd: FileDescriptor) -> bool {
+        self.len(fd) == 0
+    }
+
+    /// Removes and yields all currently buffered bytes for `fd`.
+    pub fn drain(&mut self, fd: FileDescriptor) -> impl Iterator<Item = u8> {
+        self.queues.remove(&fd).unwrap_or_default().into_iter()
+    }
+}

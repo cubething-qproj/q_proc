@@ -4592,6 +4592,7 @@ dependencies = [
  "bevy_dylib",
  "q_term",
  "q_test_harness",
+ "thiserror 2.0.18",
  "tiny_bail",
 ]
 
