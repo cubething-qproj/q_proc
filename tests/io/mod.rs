@@ -7,6 +7,7 @@ use bevy::{
 
 use crate::prelude::*;
 
+mod endpoints;
 mod input;
 mod lifecycle;
 mod routing;
@@ -26,14 +27,18 @@ struct SecondEndpoint;
 
 impl IoComponent for SecondEndpoint {}
 
-fn endpoint_handle(app: &mut App, entity: Entity) -> IoHandle {
+fn io_handle<T: IoComponent>(app: &mut App, entity: Entity) -> IoHandle {
     let world = app.world_mut();
-    let mut endpoints = world.query_filtered::<(), With<FirstEndpoint>>();
+    let mut endpoints = world.query_filtered::<(), With<T>>();
     let endpoints = endpoints.query(world);
     world
         .resource::<IoComponentCache>()
-        .handle::<FirstEndpoint>(entity, &endpoints)
+        .handle::<T>(entity, &endpoints)
         .expect("the registered component on the entity should produce a handle")
+}
+
+fn endpoint_handle(app: &mut App, entity: Entity) -> IoHandle {
+    io_handle::<FirstEndpoint>(app, entity)
 }
 
 fn first_endpoint(app: &mut App) -> (Entity, IoHandle) {
