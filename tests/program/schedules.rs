@@ -22,8 +22,7 @@ fn program_runs_each_registered_schedule() {
         .add_system(Update, record_update);
 
     app.add_systems(Startup, |mut commands: Commands| {
-        let stdio = commands.spawn_empty().id();
-        spawn_process(&mut commands, stdio, TestProgram);
+        spawn_process(&mut commands, TestProgram);
     });
 
     app.add_step(

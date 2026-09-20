@@ -19,8 +19,8 @@ pub enum Sig {
     /// Polite request from another program to stop. Can be caught.
     Term,
     /// Produced by: kill builtin.
-    /// Immediate kill for the process. The kernel (q_term) despawns the
-    /// [Process] immediately. Cannot be caught.
+    /// Immediate kill for the process. The process manager despawns the
+    /// [`Process`] immediately. Cannot be caught.
     Kill,
     /// Produced by: pty close, kill builtin.
     /// Signifies that any listeners have 'hung up' and are no longer available.

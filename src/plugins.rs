@@ -71,8 +71,6 @@ impl Plugin for ProcessPlugin {
         app.init_resource::<IoComponentCache>();
         app.init_resource::<ClosingProcessIo>();
         app.add_message::<SignalMsg>();
-        app.add_message::<StdOut>();
-        app.add_message::<StdErr>();
         app.add_message::<ProcessWriteMsg>();
         app.add_message::<EndpointWriteMsg>();
         app.add_message::<ProcessInputMsg>();

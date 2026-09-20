@@ -50,25 +50,46 @@ impl IoComponentCache {
         })
     }
 
-    pub(crate) fn is_open(&self, endpoint: IoHandle, endpoints: &Query<EntityRef>) -> bool {
+    pub(crate) fn is_open(&self, endpoint: IoHandle, endpoints: &Query<&IoCapabilities>) -> bool {
         self.contains(&endpoint.component_type_id())
             && endpoints
                 .get(endpoint.entity())
-                .is_ok_and(|entity| entity.contains_type_id(endpoint.component_type_id()))
+                .is_ok_and(|capabilities| capabilities.contains(&endpoint.component_type_id()))
     }
 }
+
+#[derive(Component, Default, Deref, DerefMut)]
+pub(crate) struct IoCapabilities(HashSet<TypeId>);
 
 /// Descriptor tables retained until final writes from removed processes are routed.
 #[derive(Resource, Default, Deref, DerefMut)]
 pub(crate) struct ClosingProcessIo(HashMap<Entity, ProcessFdTable>);
 
+fn add_endpoint_capability<T: IoComponent>(
+    added: On<Add, T>,
+    mut commands: Commands,
+    mut endpoints: Query<&mut IoCapabilities>,
+) {
+    if let Ok(mut capabilities) = endpoints.get_mut(added.entity) {
+        capabilities.insert(TypeId::of::<T>());
+    } else {
+        commands
+            .entity(added.entity)
+            .insert(IoCapabilities(HashSet::from([TypeId::of::<T>()])));
+    }
+}
+
 fn close_removed_endpoint<T: IoComponent>(
     removed: On<Remove, T>,
+    mut endpoints: Query<&mut IoCapabilities>,
     mut descriptors: Query<&mut ProcessFdTable>,
     mut closing: ResMut<ClosingProcessIo>,
 ) {
     let endpoint = removed.entity;
     let component = TypeId::of::<T>();
+    if let Ok(mut capabilities) = endpoints.get_mut(endpoint) {
+        capabilities.remove(&component);
+    }
     for mut table in &mut descriptors {
         table.close_endpoint(endpoint, component);
     }
@@ -93,6 +114,7 @@ impl RegisterIoAppExt for App {
             .0
             .insert(TypeId::of::<T>());
         if inserted {
+            self.add_observer(add_endpoint_capability::<T>);
             self.add_observer(close_removed_endpoint::<T>);
         }
         self

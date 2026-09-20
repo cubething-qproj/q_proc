@@ -40,9 +40,8 @@ fn program_labels_route_to_their_own_systems() {
         .add_system(Update, record_other);
 
     app.add_systems(Startup, |mut commands: Commands| {
-        let stdio = commands.spawn_empty().id();
-        let test = spawn_process(&mut commands, stdio, TestProgram);
-        let other = spawn_process(&mut commands, stdio, OtherProgram);
+        let test = spawn_process(&mut commands, TestProgram);
+        let other = spawn_process(&mut commands, OtherProgram);
         commands.insert_resource(ExpectedRoutes { test, other });
     });
 
@@ -83,7 +82,6 @@ fn queued_invocation_skips_a_process_removed_by_an_earlier_invocation() {
     app.program::<OtherProgram>()
         .add_system(Update, record_other);
 
-    let stdio = app.world_mut().spawn_empty().id();
     let killer = app
         .world_mut()
         .spawn(Process {
@@ -91,9 +89,6 @@ fn queued_invocation_skips_a_process_removed_by_an_earlier_invocation() {
             signal_overrides: HashMap::new(),
             argv: Vec::new(),
             environ: HashMap::new(),
-            fd0: stdio,
-            fd1: stdio,
-            fd2: stdio,
         })
         .id();
     let victim = app
@@ -103,9 +98,6 @@ fn queued_invocation_skips_a_process_removed_by_an_earlier_invocation() {
             signal_overrides: HashMap::new(),
             argv: Vec::new(),
             environ: HashMap::new(),
-            fd0: stdio,
-            fd1: stdio,
-            fd2: stdio,
         })
         .id();
     app.insert_resource(Victim(victim));

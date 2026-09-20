@@ -43,10 +43,6 @@ fn first_endpoint(app: &mut App) -> (Entity, IoHandle) {
 }
 
 fn spawn_io_process(app: &mut App, descriptors: &[(FileDescriptor, IoHandle)]) -> Entity {
-    let stdio = descriptors.first().map_or_else(
-        || app.world_mut().spawn_empty().id(),
-        |(_, handle)| handle.entity(),
-    );
     let mut table = ProcessFdTable::default();
     for (fd, handle) in descriptors {
         table.set(*fd, *handle);
@@ -59,9 +55,6 @@ fn spawn_io_process(app: &mut App, descriptors: &[(FileDescriptor, IoHandle)]) -
                 signal_overrides: HashMap::new(),
                 argv: Vec::new(),
                 environ: HashMap::new(),
-                fd0: stdio,
-                fd1: stdio,
-                fd2: stdio,
             },
             table,
             ProcessInputBuffer::default(),
@@ -188,6 +181,24 @@ fn write_constructors_use_one_message_type_and_preserve_bytes() {
     assert_eq!(stderr.bytes, b"err");
     assert_eq!(custom.fd, FileDescriptor::new(9));
     assert_eq!(custom.bytes, b"custom");
+}
+
+#[test]
+fn processes_require_empty_io_state() {
+    let mut app = App::new();
+    let process = app
+        .world_mut()
+        .spawn(Process {
+            prog: IoProgram.intern(),
+            signal_overrides: HashMap::new(),
+            argv: Vec::new(),
+            environ: HashMap::new(),
+        })
+        .id();
+
+    let process = app.world().entity(process);
+    assert!(process.contains::<ProcessFdTable>());
+    assert!(process.contains::<ProcessInputBuffer>());
 }
 
 #[test]

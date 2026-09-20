@@ -1,3 +1,5 @@
+use bevy::ecs::schedule::ScheduleLabel;
+
 use super::*;
 
 #[derive(Resource)]

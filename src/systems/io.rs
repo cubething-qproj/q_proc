@@ -7,7 +7,7 @@ pub(crate) fn demux_input(
     components: Res<IoComponentCache>,
     mut queries: ParamSet<(
         Query<(&ProcessFdTable, &mut ProcessInputBuffer), With<Process>>,
-        Query<EntityRef>,
+        Query<&IoCapabilities>,
     )>,
 ) {
     for message in messages.drain() {
@@ -43,7 +43,8 @@ pub(crate) fn route_writes(
     mut messages: ResMut<Messages<ProcessWriteMsg>>,
     descriptors: Query<&ProcessFdTable>,
     closing: Res<ClosingProcessIo>,
-    endpoints: Query<EntityRef>,
+    entities: Query<()>,
+    endpoints: Query<&IoCapabilities>,
     components: Res<IoComponentCache>,
     mut routed: MessageWriter<EndpointWriteMsg>,
 ) {
@@ -51,7 +52,12 @@ pub(crate) fn route_writes(
         let Some(endpoint) = descriptors
             .get(message.process)
             .ok()
-            .or_else(|| closing.get(&message.process))
+            .or_else(|| {
+                entities
+                    .contains(message.process)
+                    .then(|| closing.get(&message.process))
+                    .flatten()
+            })
             .and_then(|descriptors| descriptors.get(message.fd))
         else {
             warn!(

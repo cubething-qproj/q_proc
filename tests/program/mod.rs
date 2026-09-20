@@ -28,16 +28,13 @@ fn record_invocation(In(process): In<Entity>, mut invocations: ResMut<Invocation
     invocations.0.push(process);
 }
 
-fn spawn_process(commands: &mut Commands, stdio: Entity, program: impl ProgramLabel) -> Entity {
+fn spawn_process(commands: &mut Commands, program: impl ProgramLabel) -> Entity {
     commands
         .spawn(Process {
             prog: program.intern(),
             signal_overrides: HashMap::new(),
             argv: Vec::new(),
             environ: HashMap::new(),
-            fd0: stdio,
-            fd1: stdio,
-            fd2: stdio,
         })
         .id()
 }
@@ -52,8 +49,7 @@ fn update_system_runs_for_matching_process() {
         .add_system(Update, record_invocation);
 
     app.add_systems(Startup, |mut commands: Commands| {
-        let stdio = commands.spawn_empty().id();
-        let process = spawn_process(&mut commands, stdio, TestProgram);
+        let process = spawn_process(&mut commands, TestProgram);
         commands.insert_resource(ExpectedProcess(process));
     });
 
@@ -91,10 +87,9 @@ fn update_system_runs_for_each_matching_process() {
         .add_system(Update, record_invocation);
 
     app.add_systems(Startup, |mut commands: Commands| {
-        let stdio = commands.spawn_empty().id();
         let processes = [
-            spawn_process(&mut commands, stdio, TestProgram),
-            spawn_process(&mut commands, stdio, TestProgram),
+            spawn_process(&mut commands, TestProgram),
+            spawn_process(&mut commands, TestProgram),
         ];
         commands.insert_resource(ExpectedProcesses(processes));
     });

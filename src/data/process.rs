@@ -84,13 +84,11 @@ macro_rules! impl_program_label {
     };
 }
 
-/// A [`Process`] is a set of [`System`]s which is managed by a [`Shell`].
-/// Processes should be run by running [`Shell::spawn_process`]. The process
-/// dies when this component is removed. Lifecycle hooks are a good way to
-/// implement de/initialization behaviors.
-// TODO: Piping? Need file descriptors if so. Probably a relationship (ProcessFd<const CHANNEL: u8)
+/// A [`Process`] is one running instance of a registered [`ProgramLabel`].
+/// The process dies when this component is removed.
 #[derive(Component, Clone, Debug)]
 #[component(immutable, on_remove = Process::on_remove)]
+#[require(ProcessFdTable, ProcessInputBuffer)]
 pub struct Process {
     /// The [`ProgramLabel`] associated with this [`Process`].
     /// Determines what this process _does_.
@@ -101,12 +99,6 @@ pub struct Process {
     pub argv: Vec<String>,
     /// Environment variables.
     pub environ: HashMap<String, String>,
-    /// stdin
-    pub fd0: Entity,
-    /// stdout
-    pub fd1: Entity,
-    /// stderr
-    pub fd2: Entity,
 }
 
 impl Process {

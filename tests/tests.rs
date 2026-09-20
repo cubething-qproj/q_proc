@@ -1,7 +1,6 @@
 mod io;
 mod plugin;
 mod program;
-mod stdio;
 
 pub mod prelude {
     pub use super::get_test_app;
