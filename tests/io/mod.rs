@@ -184,7 +184,7 @@ fn write_constructors_use_one_message_type_and_preserve_bytes() {
 }
 
 #[test]
-fn processes_require_empty_io_state() {
+fn spawning_a_process_inserts_empty_required_io_components() {
     let mut app = App::new();
     let process = app
         .world_mut()
@@ -197,8 +197,16 @@ fn processes_require_empty_io_state() {
         .id();
 
     let process = app.world().entity(process);
-    assert!(process.contains::<ProcessFdTable>());
-    assert!(process.contains::<ProcessInputBuffer>());
+    let descriptors = process
+        .get::<ProcessFdTable>()
+        .expect("ProcessFdTable should be inserted with Process");
+    let input = process
+        .get::<ProcessInputBuffer>()
+        .expect("ProcessInputBuffer should be inserted with Process");
+    assert!(descriptors.get(FileDescriptor::STDIN).is_none());
+    assert!(descriptors.get(FileDescriptor::STDOUT).is_none());
+    assert!(descriptors.get(FileDescriptor::STDERR).is_none());
+    assert!(input.is_empty());
 }
 
 #[test]

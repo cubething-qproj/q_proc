@@ -58,6 +58,10 @@ impl IoComponentCache {
     }
 }
 
+/// Registered endpoint component types currently present on an entity.
+///
+/// Each type identifies one adapter that can consume writes addressed to that
+/// capability; an [`IoHandle`] selects exactly one such type on the entity.
 #[derive(Component, Default, Deref, DerefMut)]
 pub(crate) struct IoCapabilities(HashSet<TypeId>);
 
