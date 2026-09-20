@@ -125,6 +125,25 @@ fn program_schedule_registration_is_lazy_and_supports_custom_schedules() {
 }
 
 #[test]
+fn registration_backfills_existing_endpoint_components() {
+    let mut app = App::new();
+    app.add_plugins(ProcessPlugin);
+    let endpoint = app.world_mut().spawn(FirstEndpoint).id();
+    app.register_io_component::<FirstEndpoint>();
+    let handle = endpoint_handle(&mut app, endpoint);
+    let process = spawn_io_process(&mut app, &[(FileDescriptor::STDOUT, handle)]);
+
+    app.world_mut()
+        .write_message(ProcessWriteMsg::stdout(process, b"backfilled".to_vec()));
+    app.world_mut().run_schedule(Update);
+
+    let writes = drain_routed_writes(&mut app);
+    assert_eq!(writes.len(), 1);
+    assert_eq!(writes[0].endpoint(), handle);
+    assert_eq!(writes[0].bytes(), b"backfilled");
+}
+
+#[test]
 fn shared_endpoint_writes_retain_their_source_processes() {
     let mut app = App::new();
     app.add_plugins(ProcessPlugin);
@@ -181,14 +200,35 @@ fn closed_endpoints_do_not_retarget_or_route() {
 
     let multi_endpoint = app.world_mut().spawn((FirstEndpoint, SecondEndpoint)).id();
     let selected = endpoint_handle(&mut app, multi_endpoint);
+    let other = {
+        let world = app.world_mut();
+        let mut endpoints = world.query_filtered::<(), With<SecondEndpoint>>();
+        let endpoints = endpoints.query(world);
+        world
+            .resource::<IoComponentCache>()
+            .handle::<SecondEndpoint>(multi_endpoint, &endpoints)
+            .expect("the second registered endpoint should produce a handle")
+    };
     let selected_process = spawn_io_process(
         &mut app,
         &[
             (FileDescriptor::STDOUT, selected),
-            (FileDescriptor::STDERR, selected),
+            (FileDescriptor::STDERR, other),
         ],
     );
     let alias_process = spawn_io_process(&mut app, &[(FileDescriptor::STDOUT, selected)]);
+
+    app.world_mut().write_message(ProcessWriteMsg::stdout(
+        selected_process,
+        b"selected".to_vec(),
+    ));
+    app.world_mut()
+        .write_message(ProcessWriteMsg::stderr(selected_process, b"other".to_vec()));
+    app.world_mut().run_schedule(Update);
+    let writes = drain_routed_writes(&mut app);
+    assert_eq!(writes.len(), 2);
+    assert_eq!(writes[0].endpoint(), selected);
+    assert_eq!(writes[1].endpoint(), other);
 
     let (despawned_entity, despawned) = first_endpoint(&mut app);
     let despawned_process = spawn_io_process(&mut app, &[(FileDescriptor::STDOUT, despawned)]);
@@ -208,7 +248,7 @@ fn closed_endpoints_do_not_retarget_or_route() {
             .entity(selected_process)
             .get::<ProcessFdTable>()
             .and_then(|table| table.get(FileDescriptor::STDERR)),
-        None
+        Some(other)
     );
     assert_eq!(
         app.world()
@@ -228,6 +268,10 @@ fn closed_endpoints_do_not_retarget_or_route() {
     ));
     app.world_mut()
         .write_message(ProcessWriteMsg::stdout(alias_process, b"alias".to_vec()));
+    app.world_mut().write_message(ProcessWriteMsg::stderr(
+        selected_process,
+        b"other remains open".to_vec(),
+    ));
     app.world_mut().write_message(ProcessWriteMsg::stdout(
         despawned_process,
         b"despawned".to_vec(),
@@ -235,5 +279,8 @@ fn closed_endpoints_do_not_retarget_or_route() {
 
     app.world_mut().run_schedule(Update);
 
-    assert!(drain_routed_writes(&mut app).is_empty());
+    let writes = drain_routed_writes(&mut app);
+    assert_eq!(writes.len(), 1);
+    assert_eq!(writes[0].endpoint(), other);
+    assert_eq!(writes[0].bytes(), b"other remains open");
 }

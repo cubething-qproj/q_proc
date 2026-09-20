@@ -69,18 +69,15 @@ pub(crate) struct IoCapabilities(HashSet<TypeId>);
 #[derive(Resource, Default, Deref, DerefMut)]
 pub(crate) struct ClosingProcessIo(HashMap<Entity, ProcessFdTable>);
 
-fn add_endpoint_capability<T: IoComponent>(
-    added: On<Add, T>,
-    mut commands: Commands,
-    mut endpoints: Query<&mut IoCapabilities>,
-) {
-    if let Ok(mut capabilities) = endpoints.get_mut(added.entity) {
-        capabilities.insert(TypeId::of::<T>());
-    } else {
-        commands
-            .entity(added.entity)
-            .insert(IoCapabilities(HashSet::from([TypeId::of::<T>()])));
-    }
+fn add_endpoint_capability<T: IoComponent>(added: On<Add, T>, mut commands: Commands) {
+    let component = TypeId::of::<T>();
+    commands
+        .entity(added.entity)
+        .entry::<IoCapabilities>()
+        .or_default()
+        .and_modify(move |mut capabilities| {
+            capabilities.insert(component);
+        });
 }
 
 fn close_removed_endpoint<T: IoComponent>(
@@ -120,6 +117,22 @@ impl RegisterIoAppExt for App {
         if inserted {
             self.add_observer(add_endpoint_capability::<T>);
             self.add_observer(close_removed_endpoint::<T>);
+
+            let endpoints = {
+                let world = self.world_mut();
+                let mut query = world.query_filtered::<Entity, With<T>>();
+                query.iter(world).collect::<Vec<_>>()
+            };
+            for endpoint in endpoints {
+                let mut endpoint = self.world_mut().entity_mut(endpoint);
+                if !endpoint.contains::<IoCapabilities>() {
+                    endpoint.insert(IoCapabilities::default());
+                }
+                endpoint
+                    .get_mut::<IoCapabilities>()
+                    .expect("IoCapabilities was just inserted")
+                    .insert(TypeId::of::<T>());
+            }
         }
         self
     }
