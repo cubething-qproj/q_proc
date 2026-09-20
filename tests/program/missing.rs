@@ -5,12 +5,11 @@ use super::*;
 #[test]
 fn skips_processes_without_registered_systems() {
     let mut app = get_test_app();
-    app.register_program(TestProgram);
+    app.register_program::<TestProgram>();
 
     app.add_systems(Startup, |mut commands: Commands| {
-        let stdio = commands.spawn_empty().id();
-        spawn_process(&mut commands, stdio, TestProgram);
-        spawn_process(&mut commands, stdio, OtherProgram);
+        spawn_process(&mut commands, TestProgram);
+        spawn_process(&mut commands, OtherProgram);
     });
     app.add_step(0, |mut commands: Commands| {
         commands.write_message(AppExit::Success);

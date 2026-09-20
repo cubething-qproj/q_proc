@@ -17,12 +17,12 @@ fn record_update(In(_process): In<Entity>, mut invocations: ResMut<ScheduleInvoc
 fn program_runs_each_registered_schedule() {
     let mut app = get_test_app();
     app.init_resource::<ScheduleInvocations>();
-    app.add_program_system(TestProgram, PreUpdate, record_pre_update);
-    app.add_program_system(TestProgram, Update, record_update);
+    app.program::<TestProgram>()
+        .add_system(PreUpdate, record_pre_update)
+        .add_system(Update, record_update);
 
     app.add_systems(Startup, |mut commands: Commands| {
-        let stdio = commands.spawn_empty().id();
-        spawn_process(&mut commands, stdio, TestProgram);
+        spawn_process(&mut commands, TestProgram);
     });
 
     app.add_step(

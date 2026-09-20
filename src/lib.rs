@@ -1,8 +1,8 @@
 //! Process management primitives for Bevy.
 //!
-//! Provides [`Process`], [`Program`], signals, and stdio messages.
-//! Bridging stdio to a terminal display is left to consumer crates
-//! (e.g. `q_term`).
+//! Provides [`Process`], [`ProgramLabel`], signals, process I/O messages, and
+//! minimal pipe and tee adapters. Full pipe flow control and shell/terminal or
+//! asset-state adapters remain external or deferred.
 
 mod data;
 mod plugins;
