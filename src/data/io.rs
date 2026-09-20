@@ -34,7 +34,7 @@ impl FileDescriptor {
 pub trait IoComponent: Component {}
 
 /// Registered component types that may be selected by an [`IoHandle`].
-#[derive(Resource, Debug, Default)]
+#[derive(Resource, Debug, Default, Deref)]
 pub struct IoComponentCache(HashSet<TypeId>);
 
 impl IoComponentCache {
@@ -50,8 +50,11 @@ impl IoComponentCache {
         })
     }
 
-    pub(crate) fn contains(&self, component: TypeId) -> bool {
-        self.0.contains(&component)
+    pub(crate) fn is_open(&self, endpoint: IoHandle, endpoints: &Query<EntityRef>) -> bool {
+        self.contains(&endpoint.component_type_id())
+            && endpoints
+                .get(endpoint.entity())
+                .is_ok_and(|entity| entity.contains_type_id(endpoint.component_type_id()))
     }
 }
 
@@ -219,28 +222,5 @@ pub struct ProcessInputMsg {
 }
 
 /// Process-local input queues populated before program execution.
-#[derive(Component, Clone, Debug, Default, Reflect)]
-pub struct ProcessInputBuffer {
-    queues: HashMap<FileDescriptor, VecDeque<u8>>,
-}
-
-impl ProcessInputBuffer {
-    /// Returns the number of buffered bytes for `fd`.
-    pub fn len(&self, fd: FileDescriptor) -> usize {
-        self.queues.get(&fd).map_or(0, VecDeque::len)
-    }
-
-    /// Returns whether `fd` has no buffered bytes.
-    pub fn is_empty(&self, fd: FileDescriptor) -> bool {
-        self.len(fd) == 0
-    }
-
-    /// Removes and yields all currently buffered bytes for `fd`.
-    pub fn drain(&mut self, fd: FileDescriptor) -> impl Iterator<Item = u8> {
-        self.queues.remove(&fd).unwrap_or_default().into_iter()
-    }
-
-    pub(crate) fn append(&mut self, fd: FileDescriptor, bytes: impl IntoIterator<Item = u8>) {
-        self.queues.entry(fd).or_default().extend(bytes);
-    }
-}
+#[derive(Component, Clone, Debug, Default, Deref, DerefMut, Reflect)]
+pub struct ProcessInputBuffer(HashMap<FileDescriptor, VecDeque<u8>>);

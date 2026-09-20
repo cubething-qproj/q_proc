@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use bevy::platform::collections::HashMap;
 
 use super::*;
@@ -13,9 +15,14 @@ fn consume_input(
     let mut buffer = buffers
         .get_mut(process)
         .expect("the dispatched process should have its input buffer");
-    consumed
-        .0
-        .insert(process, buffer.drain(FileDescriptor::STDIN).collect());
+    consumed.0.insert(
+        process,
+        buffer
+            .remove(&FileDescriptor::STDIN)
+            .unwrap_or_default()
+            .into_iter()
+            .collect(),
+    );
 }
 
 #[test]
@@ -24,7 +31,8 @@ fn input_is_demultiplexed_before_shared_program_invocations() {
     app.add_plugins(ProcessPlugin);
     app.register_io_component::<FirstEndpoint>();
     app.init_resource::<ConsumedInput>();
-    app.add_program_system(IoProgram, PreUpdate, consume_input);
+    app.program::<IoProgram>()
+        .add_system(PreUpdate, consume_input);
 
     let (_, endpoint) = first_endpoint(&mut app);
     let first = spawn_io_process(&mut app, &[(FileDescriptor::STDIN, endpoint)]);
@@ -86,5 +94,9 @@ fn input_requires_the_current_descriptor_endpoint() {
         .entity(process)
         .get::<ProcessInputBuffer>()
         .expect("the process input buffer should remain present");
-    assert!(input.is_empty(FileDescriptor::STDIN));
+    assert!(
+        input
+            .get(&FileDescriptor::STDIN)
+            .is_none_or(VecDeque::is_empty)
+    );
 }

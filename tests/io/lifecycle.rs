@@ -14,7 +14,8 @@ fn final_write_routes_before_process_io_cleanup() {
     let mut app = App::new();
     app.add_plugins(ProcessPlugin);
     app.register_io_component::<FirstEndpoint>();
-    app.add_program_system(IoProgram, Update, write_then_exit);
+    app.program::<IoProgram>()
+        .add_system(Update, write_then_exit);
 
     let (_, endpoint) = first_endpoint(&mut app);
     let process = spawn_io_process(&mut app, &[(FileDescriptor::STDOUT, endpoint)]);

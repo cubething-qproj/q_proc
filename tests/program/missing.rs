@@ -5,7 +5,7 @@ use super::*;
 #[test]
 fn skips_processes_without_registered_systems() {
     let mut app = get_test_app();
-    app.register_program(TestProgram);
+    app.register_program::<TestProgram>();
 
     app.add_systems(Startup, |mut commands: Commands| {
         let stdio = commands.spawn_empty().id();

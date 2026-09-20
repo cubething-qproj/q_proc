@@ -12,9 +12,10 @@ use q_proc::impl_program_label;
 use q_proc::prelude::*;
 use q_term::prelude::*;
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
 struct MyProg;
 impl_program_label!(MyProg, "myprog");
+impl Program for MyProg {}
 
 fn main() {
     let mut app = App::new();
@@ -31,11 +32,10 @@ fn main() {
         EguiPlugin::default(),
         WorldInspectorPlugin::default(),
     ));
-    app.register_program(MyProg);
+    app.register_program::<MyProg>();
 
     // Say hello once every second
-    app.add_program_system(
-        MyProg,
+    app.program::<MyProg>().add_system(
         Update,
         |id: In<Entity>,
          procs: Query<&Process>,

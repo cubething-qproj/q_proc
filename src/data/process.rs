@@ -1,4 +1,6 @@
 //! Basic data types required for process execution
+use std::marker::PhantomData;
+
 use bevy::{
     ecs::{
         define_label,
@@ -68,7 +70,7 @@ pub type InternedProgramLabel = Interned<dyn ProgramLabel>;
 /// A [`Program`] is a set of instructions which is instantiated by spawning a
 /// [`Process`]. Where the [`Process`] is the [`Component`], this is the [`System`]
 /// manager.
-pub trait Program {
+pub trait Program: ProgramLabel + Default {
     /// Signal overriding behavior.
     /// Returns a HashMap from the signal to its override command.
     /// By default, SIGINT, SIGQUIT, SIGTERM, and SIGHUP all despawn the entity.
@@ -134,36 +136,57 @@ impl ProgramName {
     }
 }
 
-pub trait ProgramAppExt {
-    fn register_program(&mut self, prog: impl ProgramLabel);
-    // NOTE: This is similar to a ScreenScope
-    fn add_program_system<M>(
-        &mut self,
-        prog: impl ProgramLabel + Clone,
-        schedule: impl ScheduleLabel,
-        system: impl IntoProgramSystem<M>,
-    );
+/// Registration options for one program type.
+pub struct AppProgramOpts<'a, T: Program> {
+    app: &'a mut App,
+    marker: PhantomData<T>,
 }
-impl ProgramAppExt for App {
-    fn register_program(&mut self, prog: impl ProgramLabel) {
-        self.world_mut().init_resource::<Programs>();
-        let mut progs = self.world_mut().resource_mut::<Programs>();
-        progs.0.entry(prog.intern()).or_default();
-        trace!("Registered program {:?}", prog,);
-        trace!("Programs: {:#?}", progs)
-    }
-    fn add_program_system<M>(
+
+impl<T: Program> AppProgramOpts<'_, T> {
+    /// Registers one system in a host schedule for this program.
+    pub fn add_system<M>(
         &mut self,
-        prog: impl ProgramLabel + Clone,
         schedule: impl ScheduleLabel,
         system: impl IntoProgramSystem<M>,
-    ) {
-        self.init_resource::<Programs>();
-        let id = self.register_system(system);
-        let mut progs = self.world_mut().resource_mut::<Programs>();
-        let data = progs.entry(prog.clone()).or_default();
-        data.insert(schedule.intern(), id);
-        trace!("Registered program system for {:?}", prog,);
-        trace!("Programs: {:#?}", progs)
+    ) -> &mut Self {
+        let id = self.app.register_system(system);
+        let program = T::default();
+        trace!("Registered program system for {program:?}");
+        let mut programs = self.app.world_mut().resource_mut::<Programs>();
+        programs
+            .entry(program)
+            .or_default()
+            .insert(schedule.intern(), id);
+        trace!("Programs: {programs:#?}");
+        self
+    }
+}
+
+/// Adds and configures program types on an [`App`].
+pub trait ProgramAppExt {
+    /// Registers `T` without changing systems already configured for it.
+    fn register_program<T: Program>(&mut self) -> &mut Self;
+
+    /// Returns the system-registration options for `T`.
+    fn program<T: Program>(&mut self) -> AppProgramOpts<'_, T>;
+}
+
+impl ProgramAppExt for App {
+    fn register_program<T: Program>(&mut self) -> &mut Self {
+        self.world_mut().init_resource::<Programs>();
+        let program = T::default();
+        trace!("Registered program {program:?}");
+        let mut programs = self.world_mut().resource_mut::<Programs>();
+        programs.entry(program).or_default();
+        trace!("Programs: {programs:#?}");
+        self
+    }
+
+    fn program<T: Program>(&mut self) -> AppProgramOpts<'_, T> {
+        self.register_program::<T>();
+        AppProgramOpts {
+            app: self,
+            marker: PhantomData,
+        }
     }
 }

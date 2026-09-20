@@ -2,29 +2,16 @@
 
 use crate::prelude::*;
 
-pub(crate) fn queue_input(world: &mut World) {
-    let messages = world
-        .resource_mut::<Messages<ProcessInputMsg>>()
-        .drain()
-        .collect::<Vec<_>>();
-
-    for message in messages {
-        let descriptor_matches = world
-            .get_entity(message.process)
-            .ok()
-            .filter(|process| process.contains::<Process>())
-            .and_then(|process| process.get::<ProcessFdTable>())
-            .and_then(|descriptors| descriptors.get(message.fd))
-            == Some(message.endpoint);
-
-        if !descriptor_matches {
-            warn!(
-                "Discarding input for missing process or mismatched descriptor {:?}:{:?}",
-                message.process, message.fd
-            );
-            continue;
-        }
-        if !endpoint_is_open(world, message.endpoint) {
+pub(crate) fn demux_input(
+    mut messages: ResMut<Messages<ProcessInputMsg>>,
+    components: Res<IoComponentCache>,
+    mut queries: ParamSet<(
+        Query<(&ProcessFdTable, &mut ProcessInputBuffer), With<Process>>,
+        Query<EntityRef>,
+    )>,
+) {
+    for message in messages.drain() {
+        if !components.is_open(message.endpoint, &queries.p1()) {
             warn!(
                 "Discarding input from closed endpoint {:?}",
                 message.endpoint
@@ -32,46 +19,51 @@ pub(crate) fn queue_input(world: &mut World) {
             continue;
         }
 
-        let Ok(mut process) = world.get_entity_mut(message.process) else {
-            continue;
-        };
-        let Some(mut input) = process.get_mut::<ProcessInputBuffer>() else {
+        let mut process_io = queries.p0();
+        let Ok((descriptors, mut input)) = process_io.get_mut(message.process) else {
             warn!(
-                "Discarding input for process {:?} without an input buffer",
+                "Discarding input for missing process or I/O state {:?}",
                 message.process
             );
             continue;
         };
-        input.append(message.fd, message.bytes);
+        if descriptors.get(message.fd) != Some(message.endpoint) {
+            warn!(
+                "Discarding input for mismatched descriptor {:?}:{:?}",
+                message.process, message.fd
+            );
+            continue;
+        }
+
+        input.entry(message.fd).or_default().extend(message.bytes);
     }
 }
 
-pub(crate) fn route_writes(world: &mut World) {
-    let messages = world
-        .resource_mut::<Messages<ProcessWriteMsg>>()
-        .drain()
-        .collect::<Vec<_>>();
-
-    for message in messages {
-        let endpoint = world
-            .get_entity(message.process)
+pub(crate) fn route_writes(
+    mut messages: ResMut<Messages<ProcessWriteMsg>>,
+    descriptors: Query<&ProcessFdTable>,
+    endpoints: Query<EntityRef>,
+    components: Res<IoComponentCache>,
+    mut routed: MessageWriter<EndpointWriteMsg>,
+) {
+    for message in messages.drain() {
+        let Some(endpoint) = descriptors
+            .get(message.process)
             .ok()
-            .and_then(|process| process.get::<ProcessFdTable>())
-            .and_then(|descriptors| descriptors.get(message.fd));
-
-        let Some(endpoint) = endpoint else {
+            .and_then(|descriptors| descriptors.get(message.fd))
+        else {
             warn!(
                 "Discarding write for missing process or descriptor {:?}:{:?}",
                 message.process, message.fd
             );
             continue;
         };
-        if !endpoint_is_open(world, endpoint) {
+        if !components.is_open(endpoint, &endpoints) {
             warn!("Discarding write to closed endpoint {endpoint:?}");
             continue;
         }
 
-        world.write_message(EndpointWriteMsg::new(
+        routed.write(EndpointWriteMsg::new(
             message.process,
             message.fd,
             endpoint,
@@ -90,13 +82,4 @@ pub(crate) fn cleanup_process_io(
         };
         process.remove::<(ProcessFdTable, ProcessInputBuffer)>();
     }
-}
-
-fn endpoint_is_open(world: &World, endpoint: IoHandle) -> bool {
-    world
-        .get_resource::<IoComponentCache>()
-        .is_some_and(|components| components.contains(endpoint.component_type_id()))
-        && world
-            .get_entity(endpoint.entity())
-            .is_ok_and(|entity| entity.contains_type_id(endpoint.component_type_id()))
 }

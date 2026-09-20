@@ -5,8 +5,9 @@ use super::*;
 #[test]
 fn registering_a_program_preserves_existing_systems() {
     let mut app = get_test_app();
-    app.add_program_system(TestProgram, Update, record_invocation);
-    app.register_program(TestProgram);
+    app.program::<TestProgram>()
+        .add_system(Update, record_invocation);
+    app.register_program::<TestProgram>();
 
     let programs = app.world().resource::<Programs>();
     let data = programs

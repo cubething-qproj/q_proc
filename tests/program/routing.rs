@@ -22,8 +22,9 @@ fn record_other(In(process): In<Entity>, mut invocations: ResMut<RoutedInvocatio
 fn program_labels_route_to_their_own_systems() {
     let mut app = get_test_app();
     app.init_resource::<RoutedInvocations>();
-    app.add_program_system(TestProgram, Update, record_test);
-    app.add_program_system(OtherProgram, Update, record_other);
+    app.program::<TestProgram>().add_system(Update, record_test);
+    app.program::<OtherProgram>()
+        .add_system(Update, record_other);
 
     app.add_systems(Startup, |mut commands: Commands| {
         let stdio = commands.spawn_empty().id();

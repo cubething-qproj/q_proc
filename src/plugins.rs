@@ -8,7 +8,7 @@ use crate::systems::{io::*, prog::*};
 /// Ordered slots for process execution and I/O systems.
 #[derive(SystemSet, Debug, Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ProcessSystems {
-    /// Demultiplex endpoint input into process-local buffers.
+    /// Demux endpoint input into process-local buffers.
     QueueInput,
     /// Dispatch registered program systems.
     RunPrograms,
@@ -58,7 +58,7 @@ impl Plugin for ProcessPlugin {
         app.add_message::<ProcessWriteMsg>();
         app.add_message::<EndpointWriteMsg>();
         app.add_message::<ProcessInputMsg>();
-        app.add_systems(First, queue_input.in_set(ProcessSystems::QueueInput));
+        app.add_systems(First, demux_input.in_set(ProcessSystems::QueueInput));
 
         impl_program_schedules!(
             app,

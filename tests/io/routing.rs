@@ -29,7 +29,8 @@ fn program_writes_route_in_cross_descriptor_order() {
     let mut app = App::new();
     app.add_plugins(ProcessPlugin);
     app.register_io_component::<FirstEndpoint>();
-    app.add_program_system(IoProgram, Update, emit_ordered_writes);
+    app.program::<IoProgram>()
+        .add_system(Update, emit_ordered_writes);
 
     let (_, endpoint) = first_endpoint(&mut app);
     let process = spawn_io_process(
@@ -66,12 +67,13 @@ fn routing_contract_is_installed_in_every_program_schedule() {
     app.register_io_component::<FirstEndpoint>();
     app.insert_resource(Emission(b"initial"));
 
-    app.add_program_system(IoProgram, PreUpdate, emit_configured_write);
-    app.add_program_system(IoProgram, Update, emit_configured_write);
-    app.add_program_system(IoProgram, PostUpdate, emit_configured_write);
-    app.add_program_system(IoProgram, FixedPreUpdate, emit_configured_write);
-    app.add_program_system(IoProgram, FixedUpdate, emit_configured_write);
-    app.add_program_system(IoProgram, FixedPostUpdate, emit_configured_write);
+    app.program::<IoProgram>()
+        .add_system(PreUpdate, emit_configured_write)
+        .add_system(Update, emit_configured_write)
+        .add_system(PostUpdate, emit_configured_write)
+        .add_system(FixedPreUpdate, emit_configured_write)
+        .add_system(FixedUpdate, emit_configured_write)
+        .add_system(FixedPostUpdate, emit_configured_write);
 
     let (_, endpoint) = first_endpoint(&mut app);
     let process = spawn_io_process(&mut app, &[(FileDescriptor::STDOUT, endpoint)]);

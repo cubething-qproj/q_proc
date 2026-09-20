@@ -11,10 +11,11 @@ mod input;
 mod lifecycle;
 mod routing;
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
 struct IoProgram;
 
 q_proc::impl_program_label!(IoProgram, "io-program");
+impl Program for IoProgram {}
 
 #[derive(Component)]
 struct FirstEndpoint;
@@ -192,12 +193,8 @@ fn write_constructors_use_one_message_type_and_preserve_bytes() {
 
 #[test]
 fn input_buffers_are_empty_until_the_demultiplexer_appends_bytes() {
-    let mut input = ProcessInputBuffer::default();
+    let input = ProcessInputBuffer::default();
 
-    assert!(input.is_empty(FileDescriptor::STDIN));
-    assert_eq!(input.len(FileDescriptor::STDIN), 0);
-    assert_eq!(
-        input.drain(FileDescriptor::STDIN).collect::<Vec<_>>(),
-        Vec::<u8>::new()
-    );
+    assert!(input.is_empty());
+    assert!(input.get(&FileDescriptor::STDIN).is_none());
 }

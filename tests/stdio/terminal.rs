@@ -5,10 +5,11 @@ use q_term::prelude::{
 
 use super::*;
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
 struct TerminalProgram;
 
 q_proc::impl_program_label!(TerminalProgram, "terminal-program");
+impl Program for TerminalProgram {}
 
 fn write_once(
     In(process_id): In<Entity>,
@@ -36,7 +37,8 @@ fn write_once(
 fn program_output_reaches_the_terminal_buffer() {
     let mut app = get_test_app();
     app.add_plugins(TerminalPlugin);
-    app.add_program_system(TerminalProgram, Update, write_once);
+    app.program::<TerminalProgram>()
+        .add_system(Update, write_once);
 
     app.add_systems(Startup, |mut commands: Commands| {
         let terminal = commands
