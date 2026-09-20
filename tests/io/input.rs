@@ -9,7 +9,7 @@ struct ConsumedInput(HashMap<Entity, Vec<u8>>);
 
 fn consume_input(
     In(process): In<Entity>,
-    mut buffers: Query<&mut ProcessInputBuffer>,
+    mut buffers: Query<&mut ProcessInputBuffer<Vec<u8>>>,
     mut consumed: ResMut<ConsumedInput>,
 ) {
     let mut buffer = buffers
@@ -21,6 +21,7 @@ fn consume_input(
             .remove(&FileDescriptor::STDIN)
             .unwrap_or_default()
             .into_iter()
+            .flat_map(|payload| payload.iter().copied().collect::<Vec<_>>())
             .collect(),
     );
 }
@@ -38,24 +39,27 @@ fn input_is_demultiplexed_before_shared_program_invocations() {
     let first = spawn_io_process(&mut app, &[(FileDescriptor::STDIN, endpoint)]);
     let second = spawn_io_process(&mut app, &[(FileDescriptor::STDIN, endpoint)]);
 
-    app.world_mut().write_message(ProcessInputMsg {
-        process: first,
-        fd: FileDescriptor::STDIN,
-        endpoint,
-        bytes: b"first".to_vec(),
-    });
-    app.world_mut().write_message(ProcessInputMsg {
-        process: first,
-        fd: FileDescriptor::STDIN,
-        endpoint,
-        bytes: b"-continued".to_vec(),
-    });
-    app.world_mut().write_message(ProcessInputMsg {
-        process: second,
-        fd: FileDescriptor::STDIN,
-        endpoint,
-        bytes: b"second".to_vec(),
-    });
+    app.world_mut()
+        .write_message(ProcessInputMsg::<Vec<u8>>::new(
+            first,
+            FileDescriptor::STDIN,
+            endpoint,
+            b"first".to_vec(),
+        ));
+    app.world_mut()
+        .write_message(ProcessInputMsg::<Vec<u8>>::new(
+            first,
+            FileDescriptor::STDIN,
+            endpoint,
+            b"-continued".to_vec(),
+        ));
+    app.world_mut()
+        .write_message(ProcessInputMsg::<Vec<u8>>::new(
+            second,
+            FileDescriptor::STDIN,
+            endpoint,
+            b"second".to_vec(),
+        ));
 
     app.world_mut().run_schedule(First);
     app.world_mut().run_schedule(PreUpdate);
@@ -81,18 +85,19 @@ fn input_requires_the_current_descriptor_endpoint() {
     let (_, stale_endpoint) = first_endpoint(&mut app);
     let process = spawn_io_process(&mut app, &[(FileDescriptor::STDIN, current_endpoint)]);
 
-    app.world_mut().write_message(ProcessInputMsg {
-        process,
-        fd: FileDescriptor::STDIN,
-        endpoint: stale_endpoint,
-        bytes: b"stale".to_vec(),
-    });
+    app.world_mut()
+        .write_message(ProcessInputMsg::<Vec<u8>>::new(
+            process,
+            FileDescriptor::STDIN,
+            stale_endpoint,
+            b"stale".to_vec(),
+        ));
     app.world_mut().run_schedule(First);
 
     let input = app
         .world()
         .entity(process)
-        .get::<ProcessInputBuffer>()
+        .get::<ProcessInputBuffer<Vec<u8>>>()
         .expect("the process input buffer should remain present");
     assert!(
         input

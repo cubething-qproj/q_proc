@@ -1,14 +1,14 @@
 //! Descriptor routing, process input, and process-local I/O teardown.
 
-use std::any::TypeId;
+use std::{any::TypeId, sync::Arc};
 
 use crate::prelude::*;
 
-pub(crate) fn demux_input(
-    mut messages: ResMut<Messages<ProcessInputMsg>>,
+pub(crate) fn demux_input<T: IoMessage>(
+    mut messages: ResMut<Messages<ProcessInputMsg<T>>>,
     components: Res<IoComponentCache>,
     mut queries: ParamSet<(
-        Query<(&ProcessFdTable, &mut ProcessInputBuffer), With<Process>>,
+        Query<(&ProcessFdTable, &mut ProcessInputBuffer<T>), With<Process>>,
         Query<&IoCapabilities>,
     )>,
 ) {
@@ -37,21 +37,25 @@ pub(crate) fn demux_input(
             continue;
         }
 
-        input.entry(message.fd).or_default().extend(message.bytes);
+        let fd = message.fd;
+        input
+            .entry(fd)
+            .or_default()
+            .push_back(message.into_shared());
     }
 }
 
-pub(crate) fn route_writes(
-    mut messages: ResMut<Messages<ProcessWriteMsg>>,
+pub(crate) fn route_writes<T: IoMessage>(
+    mut messages: ResMut<Messages<ProcessWriteMsg<T>>>,
     descriptors: Query<&ProcessFdTable>,
     closing: Res<ClosingProcessIo>,
     entities: Query<()>,
     endpoints: Query<&IoCapabilities>,
     components: Res<IoComponentCache>,
-    tees: Query<&TeeEndpoint>,
-    pipes: Query<&PipeEndpoint>,
-    mut routed: MessageWriter<EndpointWriteMsg>,
-    mut inputs: MessageWriter<ProcessInputMsg>,
+    tees: Query<&TeeEndpoint<T>>,
+    pipes: Query<&PipeEndpoint<T>>,
+    mut routed: MessageWriter<EndpointWriteMsg<T>>,
+    mut inputs: MessageWriter<ProcessInputMsg<T>>,
 ) {
     for message in messages.drain() {
         let Some(endpoint) = descriptors
@@ -71,11 +75,14 @@ pub(crate) fn route_writes(
             );
             continue;
         };
+        let process = message.process;
+        let fd = message.fd;
+        let payload = message.into_shared();
         route_endpoint(
-            message.process,
-            message.fd,
+            process,
+            fd,
             endpoint,
-            &message.bytes,
+            &payload,
             true,
             &components,
             &endpoints,
@@ -87,26 +94,30 @@ pub(crate) fn route_writes(
     }
 }
 
-fn route_endpoint(
+fn route_endpoint<T: IoMessage>(
     process: Entity,
     fd: FileDescriptor,
     endpoint: IoHandle,
-    bytes: &[u8],
+    payload: &Arc<T>,
     expand_tee: bool,
     capabilities: &IoComponentCache,
     endpoints: &Query<&IoCapabilities>,
-    tees: &Query<&TeeEndpoint>,
-    pipes: &Query<&PipeEndpoint>,
-    routed: &mut MessageWriter<EndpointWriteMsg>,
-    inputs: &mut MessageWriter<ProcessInputMsg>,
+    tees: &Query<&TeeEndpoint<T>>,
+    pipes: &Query<&PipeEndpoint<T>>,
+    routed: &mut MessageWriter<EndpointWriteMsg<T>>,
+    inputs: &mut MessageWriter<ProcessInputMsg<T>>,
 ) {
     if !capabilities.is_open(endpoint, endpoints) {
         warn!("Discarding write to closed endpoint {endpoint:?}");
         return;
     }
+    if !capabilities.accepts::<T>(endpoint) {
+        warn!("Discarding write to endpoint on an incompatible I/O message lane {endpoint:?}");
+        return;
+    }
 
     let component = endpoint.component_type_id();
-    if component == TypeId::of::<TeeEndpoint>() {
+    if component == TypeId::of::<TeeEndpoint<T>>() {
         if !expand_tee {
             warn!("Discarding nested tee output {endpoint:?}; nested tees are not yet supported");
             return;
@@ -115,13 +126,18 @@ fn route_endpoint(
             warn!("Discarding write to missing tee endpoint {endpoint:?}");
             return;
         };
-        routed.write(EndpointWriteMsg::new(process, fd, endpoint, bytes.to_vec()));
+        routed.write(EndpointWriteMsg::new(
+            process,
+            fd,
+            endpoint,
+            Arc::clone(payload),
+        ));
         for output in tee.outputs() {
             route_endpoint(
                 process,
                 fd,
                 *output,
-                bytes,
+                payload,
                 false,
                 capabilities,
                 endpoints,
@@ -134,18 +150,23 @@ fn route_endpoint(
         return;
     }
 
-    routed.write(EndpointWriteMsg::new(process, fd, endpoint, bytes.to_vec()));
-    if component == TypeId::of::<PipeEndpoint>() {
+    routed.write(EndpointWriteMsg::new(
+        process,
+        fd,
+        endpoint,
+        Arc::clone(payload),
+    ));
+    if component == TypeId::of::<PipeEndpoint<T>>() {
         let Ok(pipe) = pipes.get(endpoint.entity()) else {
             warn!("Discarding write to missing pipe endpoint {endpoint:?}");
             return;
         };
-        inputs.write(ProcessInputMsg {
-            process: pipe.process(),
-            fd: pipe.fd(),
+        inputs.write(ProcessInputMsg::from_shared(
+            pipe.process(),
+            pipe.fd(),
             endpoint,
-            bytes: bytes.to_vec(),
-        });
+            Arc::clone(payload),
+        ));
     }
 }
 

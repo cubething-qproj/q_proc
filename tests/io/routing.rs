@@ -11,20 +11,26 @@ struct CustomProgramSchedule;
 fn emit_configured_write(
     In(process): In<Entity>,
     emission: Res<Emission>,
-    mut writes: MessageWriter<ProcessWriteMsg>,
+    mut writes: MessageWriter<ProcessWriteMsg<Vec<u8>>>,
 ) {
-    writes.write(ProcessWriteMsg::stdout(process, emission.0.to_vec()));
+    writes.write(ProcessWriteMsg::<Vec<u8>>::stdout(
+        process,
+        emission.0.to_vec(),
+    ));
 }
 
-fn emit_ordered_writes(In(process): In<Entity>, mut writes: MessageWriter<ProcessWriteMsg>) {
-    writes.write(ProcessWriteMsg::stdout(process, b"a".to_vec()));
-    writes.write(ProcessWriteMsg::stderr(process, b"b".to_vec()));
-    writes.write(ProcessWriteMsg::stdout(process, b"c".to_vec()));
+fn emit_ordered_writes(
+    In(process): In<Entity>,
+    mut writes: MessageWriter<ProcessWriteMsg<Vec<u8>>>,
+) {
+    writes.write(ProcessWriteMsg::<Vec<u8>>::stdout(process, b"a".to_vec()));
+    writes.write(ProcessWriteMsg::<Vec<u8>>::stderr(process, b"b".to_vec()));
+    writes.write(ProcessWriteMsg::<Vec<u8>>::stdout(process, b"c".to_vec()));
 }
 
-fn drain_routed_writes(app: &mut App) -> Vec<EndpointWriteMsg> {
+fn drain_routed_writes(app: &mut App) -> Vec<EndpointWriteMsg<Vec<u8>>> {
     app.world_mut()
-        .resource_mut::<Messages<EndpointWriteMsg>>()
+        .resource_mut::<Messages<EndpointWriteMsg<Vec<u8>>>>()
         .drain()
         .collect()
 }
@@ -55,7 +61,7 @@ fn program_writes_route_in_cross_descriptor_order() {
     assert_eq!(
         writes
             .iter()
-            .map(|write| (write.fd(), write.bytes()))
+            .map(|write| (write.fd(), write.payload().as_slice()))
             .collect::<Vec<_>>(),
         [
             (FileDescriptor::STDOUT, b"a".as_slice()),
@@ -92,7 +98,7 @@ fn routing_contract_is_installed_in_every_program_schedule() {
             assert_eq!(writes[0].process(), process);
             assert_eq!(writes[0].fd(), FileDescriptor::STDOUT);
             assert_eq!(writes[0].endpoint(), endpoint);
-            assert_eq!(writes[0].bytes(), $bytes);
+            assert_eq!(writes[0].payload(), $bytes);
         }};
     }
 
@@ -121,7 +127,7 @@ fn program_schedule_registration_is_lazy_and_supports_custom_schedules() {
     let writes = drain_routed_writes(&mut app);
     assert_eq!(writes.len(), 1);
     assert_eq!(writes[0].process(), process);
-    assert_eq!(writes[0].bytes(), b"custom");
+    assert_eq!(writes[0].payload(), b"custom");
 }
 
 #[test]
@@ -134,13 +140,16 @@ fn registration_backfills_existing_endpoint_components() {
     let process = spawn_io_process(&mut app, &[(FileDescriptor::STDOUT, handle)]);
 
     app.world_mut()
-        .write_message(ProcessWriteMsg::stdout(process, b"backfilled".to_vec()));
+        .write_message(ProcessWriteMsg::<Vec<u8>>::stdout(
+            process,
+            b"backfilled".to_vec(),
+        ));
     app.world_mut().run_schedule(Update);
 
     let writes = drain_routed_writes(&mut app);
     assert_eq!(writes.len(), 1);
     assert_eq!(writes[0].endpoint(), handle);
-    assert_eq!(writes[0].bytes(), b"backfilled");
+    assert_eq!(writes[0].payload(), b"backfilled");
 }
 
 #[test]
@@ -153,18 +162,21 @@ fn shared_endpoint_writes_retain_their_source_processes() {
     let first = spawn_io_process(&mut app, &[(FileDescriptor::STDOUT, endpoint)]);
     let second = spawn_io_process(&mut app, &[(FileDescriptor::STDOUT, endpoint)]);
     app.world_mut()
-        .write_message(ProcessWriteMsg::stdout(first, b"first".to_vec()));
+        .write_message(ProcessWriteMsg::<Vec<u8>>::stdout(first, b"first".to_vec()));
     app.world_mut()
-        .write_message(ProcessWriteMsg::stdout(second, b"second".to_vec()));
+        .write_message(ProcessWriteMsg::<Vec<u8>>::stdout(
+            second,
+            b"second".to_vec(),
+        ));
 
     app.world_mut().run_schedule(Update);
 
     let writes = drain_routed_writes(&mut app);
     assert_eq!(writes.len(), 2);
     assert_eq!(writes[0].process(), first);
-    assert_eq!(writes[0].bytes(), b"first");
+    assert_eq!(writes[0].payload(), b"first");
     assert_eq!(writes[1].process(), second);
-    assert_eq!(writes[1].bytes(), b"second");
+    assert_eq!(writes[1].payload(), b"second");
     assert!(writes.iter().all(|write| write.endpoint() == endpoint));
 }
 
@@ -184,7 +196,10 @@ fn missing_process_table_and_descriptor_do_not_route() {
 
     for process in [missing_descriptor, missing_table, missing_process] {
         app.world_mut()
-            .write_message(ProcessWriteMsg::stdout(process, b"discarded".to_vec()));
+            .write_message(ProcessWriteMsg::<Vec<u8>>::stdout(
+                process,
+                b"discarded".to_vec(),
+            ));
     }
     app.world_mut().run_schedule(Update);
 
@@ -218,12 +233,16 @@ fn closed_endpoints_do_not_retarget_or_route() {
     );
     let alias_process = spawn_io_process(&mut app, &[(FileDescriptor::STDOUT, selected)]);
 
-    app.world_mut().write_message(ProcessWriteMsg::stdout(
-        selected_process,
-        b"selected".to_vec(),
-    ));
     app.world_mut()
-        .write_message(ProcessWriteMsg::stderr(selected_process, b"other".to_vec()));
+        .write_message(ProcessWriteMsg::<Vec<u8>>::stdout(
+            selected_process,
+            b"selected".to_vec(),
+        ));
+    app.world_mut()
+        .write_message(ProcessWriteMsg::<Vec<u8>>::stderr(
+            selected_process,
+            b"other".to_vec(),
+        ));
     app.world_mut().run_schedule(Update);
     let writes = drain_routed_writes(&mut app);
     assert_eq!(writes.len(), 2);
@@ -262,25 +281,31 @@ fn closed_endpoints_do_not_retarget_or_route() {
         .insert(FirstEndpoint);
 
     assert!(app.world_mut().despawn(despawned_entity));
-    app.world_mut().write_message(ProcessWriteMsg::stdout(
-        selected_process,
-        b"removed then reinserted".to_vec(),
-    ));
     app.world_mut()
-        .write_message(ProcessWriteMsg::stdout(alias_process, b"alias".to_vec()));
-    app.world_mut().write_message(ProcessWriteMsg::stderr(
-        selected_process,
-        b"other remains open".to_vec(),
-    ));
-    app.world_mut().write_message(ProcessWriteMsg::stdout(
-        despawned_process,
-        b"despawned".to_vec(),
-    ));
+        .write_message(ProcessWriteMsg::<Vec<u8>>::stdout(
+            selected_process,
+            b"removed then reinserted".to_vec(),
+        ));
+    app.world_mut()
+        .write_message(ProcessWriteMsg::<Vec<u8>>::stdout(
+            alias_process,
+            b"alias".to_vec(),
+        ));
+    app.world_mut()
+        .write_message(ProcessWriteMsg::<Vec<u8>>::stderr(
+            selected_process,
+            b"other remains open".to_vec(),
+        ));
+    app.world_mut()
+        .write_message(ProcessWriteMsg::<Vec<u8>>::stdout(
+            despawned_process,
+            b"despawned".to_vec(),
+        ));
 
     app.world_mut().run_schedule(Update);
 
     let writes = drain_routed_writes(&mut app);
     assert_eq!(writes.len(), 1);
     assert_eq!(writes[0].endpoint(), other);
-    assert_eq!(writes[0].bytes(), b"other remains open");
+    assert_eq!(writes[0].payload(), b"other remains open");
 }
