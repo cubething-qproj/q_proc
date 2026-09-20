@@ -58,6 +58,7 @@ impl IoComponentCache {
     }
 }
 
+/// Descriptor tables retained until final writes from removed processes are routed.
 #[derive(Resource, Default, Deref, DerefMut)]
 pub(crate) struct ClosingProcessIo(HashMap<Entity, ProcessFdTable>);
 
