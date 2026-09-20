@@ -56,9 +56,7 @@ pub(crate) fn add_process_schedule<S: ScheduleLabel + Clone>(app: &mut App, sche
             ApplyDeferred
                 .after(ProcessSystems::RunPrograms)
                 .before(ProcessSystems::RouteWrites),
-            (route_writes, route_tee_writes, route_pipe_writes)
-                .chain()
-                .in_set(ProcessSystems::RouteWrites),
+            route_writes.in_set(ProcessSystems::RouteWrites),
             cleanup_process_io.in_set(ProcessSystems::Cleanup),
         ),
     );
@@ -72,8 +70,6 @@ impl Plugin for ProcessPlugin {
         app.init_resource::<Programs>();
         app.init_resource::<IoComponentCache>();
         app.init_resource::<ClosingProcessIo>();
-        app.init_resource::<PipeWriteCursor>();
-        app.init_resource::<TeeWriteCursor>();
         app.register_io_component::<PipeEndpoint>();
         app.register_io_component::<TeeEndpoint>();
         app.add_message::<SignalMsg>();

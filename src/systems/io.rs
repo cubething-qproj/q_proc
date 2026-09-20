@@ -2,15 +2,7 @@
 
 use std::any::TypeId;
 
-use bevy::ecs::message::MessageCursor;
-
 use crate::prelude::*;
-
-#[derive(Resource, Default)]
-pub(crate) struct PipeWriteCursor(MessageCursor<EndpointWriteMsg>);
-
-#[derive(Resource, Default)]
-pub(crate) struct TeeWriteCursor(MessageCursor<EndpointWriteMsg>);
 
 pub(crate) fn demux_input(
     mut messages: ResMut<Messages<ProcessInputMsg>>,
@@ -56,7 +48,10 @@ pub(crate) fn route_writes(
     entities: Query<()>,
     endpoints: Query<&IoCapabilities>,
     components: Res<IoComponentCache>,
+    tees: Query<&TeeEndpoint>,
+    pipes: Query<&PipeEndpoint>,
     mut routed: MessageWriter<EndpointWriteMsg>,
+    mut inputs: MessageWriter<ProcessInputMsg>,
 ) {
     for message in messages.drain() {
         let Some(endpoint) = descriptors
@@ -76,91 +71,80 @@ pub(crate) fn route_writes(
             );
             continue;
         };
-        if !components.is_open(endpoint, &endpoints) {
-            warn!("Discarding write to closed endpoint {endpoint:?}");
-            continue;
-        }
-
-        routed.write(EndpointWriteMsg::new(
+        route_endpoint(
             message.process,
             message.fd,
             endpoint,
-            message.bytes,
-        ));
+            &message.bytes,
+            true,
+            &components,
+            &endpoints,
+            &tees,
+            &pipes,
+            &mut routed,
+            &mut inputs,
+        );
     }
 }
 
-pub(crate) fn route_tee_writes(
-    mut cursor: ResMut<TeeWriteCursor>,
-    mut messages: ParamSet<(
-        Res<Messages<EndpointWriteMsg>>,
-        MessageWriter<EndpointWriteMsg>,
-    )>,
-    tees: Query<&TeeEndpoint>,
-    capabilities: Res<IoComponentCache>,
-    endpoints: Query<&IoCapabilities>,
+fn route_endpoint(
+    process: Entity,
+    fd: FileDescriptor,
+    endpoint: IoHandle,
+    bytes: &[u8],
+    expand_tee: bool,
+    capabilities: &IoComponentCache,
+    endpoints: &Query<&IoCapabilities>,
+    tees: &Query<&TeeEndpoint>,
+    pipes: &Query<&PipeEndpoint>,
+    routed: &mut MessageWriter<EndpointWriteMsg>,
+    inputs: &mut MessageWriter<ProcessInputMsg>,
 ) {
-    let forwarded = {
-        let messages = messages.p0();
-        cursor
-            .0
-            .read(&messages)
-            .filter(|write| write.endpoint().component_type_id() == TypeId::of::<TeeEndpoint>())
-            .flat_map(|write| {
-                let Ok(tee) = tees.get(write.endpoint().entity()) else {
-                    warn!(
-                        "Discarding write to missing tee endpoint {:?}",
-                        write.endpoint()
-                    );
-                    return Vec::new();
-                };
-                tee.outputs()
-                    .iter()
-                    .filter(|output| {
-                        let open = capabilities.is_open(**output, &endpoints);
-                        if !open {
-                            warn!("Discarding tee output to closed endpoint {output:?}");
-                        }
-                        open
-                    })
-                    .map(|output| {
-                        EndpointWriteMsg::new(
-                            write.process(),
-                            write.fd(),
-                            *output,
-                            write.bytes().to_vec(),
-                        )
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>()
-    };
-    messages.p1().write_batch(forwarded);
-}
+    if !capabilities.is_open(endpoint, endpoints) {
+        warn!("Discarding write to closed endpoint {endpoint:?}");
+        return;
+    }
 
-pub(crate) fn route_pipe_writes(
-    mut cursor: ResMut<PipeWriteCursor>,
-    messages: Res<Messages<EndpointWriteMsg>>,
-    pipes: Query<&PipeEndpoint>,
-    mut inputs: MessageWriter<ProcessInputMsg>,
-) {
-    for write in cursor
-        .0
-        .read(&messages)
-        .filter(|write| write.endpoint().component_type_id() == TypeId::of::<PipeEndpoint>())
-    {
-        let Ok(pipe) = pipes.get(write.endpoint().entity()) else {
-            warn!(
-                "Discarding write to missing pipe endpoint {:?}",
-                write.endpoint()
+    let component = endpoint.component_type_id();
+    if component == TypeId::of::<TeeEndpoint>() {
+        if !expand_tee {
+            warn!("Discarding nested tee output {endpoint:?}; nested tees are not yet supported");
+            return;
+        }
+        let Ok(tee) = tees.get(endpoint.entity()) else {
+            warn!("Discarding write to missing tee endpoint {endpoint:?}");
+            return;
+        };
+        routed.write(EndpointWriteMsg::new(process, fd, endpoint, bytes.to_vec()));
+        for output in tee.outputs() {
+            route_endpoint(
+                process,
+                fd,
+                *output,
+                bytes,
+                false,
+                capabilities,
+                endpoints,
+                tees,
+                pipes,
+                routed,
+                inputs,
             );
-            continue;
+        }
+        return;
+    }
+
+    routed.write(EndpointWriteMsg::new(process, fd, endpoint, bytes.to_vec()));
+    if component == TypeId::of::<PipeEndpoint>() {
+        let Ok(pipe) = pipes.get(endpoint.entity()) else {
+            warn!("Discarding write to missing pipe endpoint {endpoint:?}");
+            return;
         };
         inputs.write(ProcessInputMsg {
             process: pipe.process(),
             fd: pipe.fd(),
-            endpoint: write.endpoint(),
-            bytes: write.bytes().to_vec(),
+            endpoint,
+            bytes: bytes.to_vec(),
         });
     }
 }

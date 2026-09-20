@@ -84,6 +84,7 @@ fn close_removed_endpoint<T: IoComponent>(
     removed: On<Remove, T>,
     mut endpoints: Query<&mut IoCapabilities>,
     mut descriptors: Query<&mut ProcessFdTable>,
+    mut tees: Query<&mut TeeEndpoint>,
     mut closing: ResMut<ClosingProcessIo>,
 ) {
     let endpoint = removed.entity;
@@ -93,6 +94,9 @@ fn close_removed_endpoint<T: IoComponent>(
     }
     for mut table in &mut descriptors {
         table.close_endpoint(endpoint, component);
+    }
+    for mut tee in &mut tees {
+        tee.close_output(endpoint, component);
     }
     for table in closing.values_mut() {
         table.close_endpoint(endpoint, component);

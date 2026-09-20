@@ -1,5 +1,7 @@
 //! Generic process I/O endpoints.
 
+use std::any::TypeId;
+
 use crate::prelude::*;
 
 /// A pipe write endpoint that forwards bytes to one process descriptor.
@@ -34,9 +36,8 @@ impl IoComponent for PipeEndpoint {}
 
 /// An endpoint that duplicates each write to configured downstream handles.
 ///
-/// Outputs are visited in declaration order. Tee cycles are unsupported.
+/// Outputs are visited in declaration order. Nested tees are not yet supported.
 #[derive(Component, Clone, Debug, Default, Reflect)]
-#[component(immutable)]
 pub struct TeeEndpoint {
     outputs: Vec<IoHandle>,
 }
@@ -52,6 +53,11 @@ impl TeeEndpoint {
     /// Returns downstream handles in forwarding order.
     pub fn outputs(&self) -> &[IoHandle] {
         &self.outputs
+    }
+
+    pub(crate) fn close_output(&mut self, entity: Entity, component: TypeId) {
+        self.outputs
+            .retain(|handle| handle.entity() != entity || handle.component_type_id() != component);
     }
 }
 

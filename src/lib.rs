@@ -1,7 +1,8 @@
 //! Process management primitives for Bevy.
 //!
-//! Provides [`Process`], [`ProgramLabel`], signals, and process I/O messages.
-//! Endpoint adapters and shell/terminal integration are left to consumer crates.
+//! Provides [`Process`], [`ProgramLabel`], signals, process I/O messages, and
+//! minimal pipe and tee adapters. Full pipe flow control and shell/terminal or
+//! asset-state adapters remain external or deferred.
 
 mod data;
 mod plugins;
