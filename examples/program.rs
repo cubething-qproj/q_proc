@@ -15,7 +15,6 @@ use q_term::prelude::*;
 #[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
 struct MyProg;
 impl_program_label!(MyProg, "myprog");
-impl Program for MyProg {}
 
 fn main() {
     let mut app = App::new();

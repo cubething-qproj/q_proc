@@ -42,6 +42,7 @@ pub(crate) fn demux_input(
 pub(crate) fn route_writes(
     mut messages: ResMut<Messages<ProcessWriteMsg>>,
     descriptors: Query<&ProcessFdTable>,
+    closing: Res<ClosingProcessIo>,
     endpoints: Query<EntityRef>,
     components: Res<IoComponentCache>,
     mut routed: MessageWriter<EndpointWriteMsg>,
@@ -50,6 +51,7 @@ pub(crate) fn route_writes(
         let Some(endpoint) = descriptors
             .get(message.process)
             .ok()
+            .or_else(|| closing.get(&message.process))
             .and_then(|descriptors| descriptors.get(message.fd))
         else {
             warn!(
@@ -72,14 +74,6 @@ pub(crate) fn route_writes(
     }
 }
 
-pub(crate) fn cleanup_process_io(
-    mut commands: Commands,
-    mut removed_processes: RemovedComponents<Process>,
-) {
-    for process in removed_processes.read() {
-        let Ok(mut process) = commands.get_entity(process) else {
-            continue;
-        };
-        process.remove::<(ProcessFdTable, ProcessInputBuffer)>();
-    }
+pub(crate) fn cleanup_process_io(mut closing: ResMut<ClosingProcessIo>) {
+    closing.clear();
 }

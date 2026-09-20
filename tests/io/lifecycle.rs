@@ -1,5 +1,12 @@
 use super::*;
 
+#[derive(Resource)]
+struct ProcessToRemove(Entity);
+
+fn remove_process(mut commands: Commands, process: Res<ProcessToRemove>) {
+    commands.entity(process.0).remove::<Process>();
+}
+
 fn write_then_exit(
     In(process): In<Entity>,
     mut commands: Commands,
@@ -46,6 +53,25 @@ fn final_write_routes_before_process_io_cleanup() {
             .next()
             .is_none()
     );
+}
+
+#[test]
+fn removal_after_program_schedules_still_cleans_process_io() {
+    let mut app = App::new();
+    app.add_plugins(ProcessPlugin);
+    app.register_io_component::<FirstEndpoint>();
+    app.add_systems(Last, remove_process);
+
+    let (_, endpoint) = first_endpoint(&mut app);
+    let process = spawn_io_process(&mut app, &[(FileDescriptor::STDOUT, endpoint)]);
+    app.insert_resource(ProcessToRemove(process));
+
+    app.update();
+
+    let process = app.world().entity(process);
+    assert!(!process.contains::<Process>());
+    assert!(!process.contains::<ProcessFdTable>());
+    assert!(!process.contains::<ProcessInputBuffer>());
 }
 
 #[test]

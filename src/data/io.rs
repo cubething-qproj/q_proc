@@ -58,6 +58,24 @@ impl IoComponentCache {
     }
 }
 
+#[derive(Resource, Default, Deref, DerefMut)]
+pub(crate) struct ClosingProcessIo(HashMap<Entity, ProcessFdTable>);
+
+fn close_removed_endpoint<T: IoComponent>(
+    removed: On<Remove, T>,
+    mut descriptors: Query<&mut ProcessFdTable>,
+    mut closing: ResMut<ClosingProcessIo>,
+) {
+    let endpoint = removed.entity;
+    let component = TypeId::of::<T>();
+    for mut table in &mut descriptors {
+        table.close_endpoint(endpoint, component);
+    }
+    for table in closing.values_mut() {
+        table.close_endpoint(endpoint, component);
+    }
+}
+
 /// Registers component types that may act as I/O endpoint capabilities.
 pub trait RegisterIoAppExt {
     /// Registers `T` as an I/O endpoint capability.
@@ -67,10 +85,15 @@ pub trait RegisterIoAppExt {
 impl RegisterIoAppExt for App {
     fn register_io_component<T: IoComponent>(&mut self) -> &mut Self {
         self.init_resource::<IoComponentCache>();
-        self.world_mut()
+        self.init_resource::<ClosingProcessIo>();
+        let inserted = self
+            .world_mut()
             .resource_mut::<IoComponentCache>()
             .0
             .insert(TypeId::of::<T>());
+        if inserted {
+            self.add_observer(close_removed_endpoint::<T>);
+        }
         self
     }
 }
@@ -127,6 +150,12 @@ impl ProcessFdTable {
         let handle = self.get(from).ok_or(BadFd(from))?;
         self.set(to, handle);
         Ok(())
+    }
+
+    pub(crate) fn close_endpoint(&mut self, entity: Entity, component: TypeId) {
+        self.descriptors.retain(|_, handle| {
+            handle.entity() != entity || handle.component_type_id() != component
+        });
     }
 }
 

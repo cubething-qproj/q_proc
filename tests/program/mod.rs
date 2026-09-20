@@ -12,13 +12,11 @@ mod schedules;
 struct TestProgram;
 
 q_proc::impl_program_label!(TestProgram, "test-program");
-impl Program for TestProgram {}
 
 #[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
 struct OtherProgram;
 
 q_proc::impl_program_label!(OtherProgram, "other-program");
-impl Program for OtherProgram {}
 
 #[derive(Resource, Default)]
 struct Invocations(Vec<Entity>);

@@ -15,7 +15,6 @@ mod routing;
 struct IoProgram;
 
 q_proc::impl_program_label!(IoProgram, "io-program");
-impl Program for IoProgram {}
 
 #[derive(Component)]
 struct FirstEndpoint;

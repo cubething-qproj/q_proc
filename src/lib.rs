@@ -1,6 +1,6 @@
 //! Process management primitives for Bevy.
 //!
-//! Provides [`Process`], [`Program`], signals, and stdio messages.
+//! Provides [`Process`], [`ProgramLabel`], signals, and process I/O messages.
 //! Bridging stdio to a terminal display is left to consumer crates
 //! (e.g. `q_term`).
 

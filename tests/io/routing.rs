@@ -3,6 +3,9 @@ use super::*;
 #[derive(Resource)]
 struct Emission(&'static [u8]);
 
+#[derive(ScheduleLabel, Clone, Debug, Eq, Hash, PartialEq)]
+struct CustomProgramSchedule;
+
 fn emit_configured_write(
     In(process): In<Entity>,
     emission: Res<Emission>,
@@ -100,6 +103,26 @@ fn routing_contract_is_installed_in_every_program_schedule() {
 }
 
 #[test]
+fn program_schedule_registration_is_lazy_and_supports_custom_schedules() {
+    let mut app = App::new();
+    app.add_plugins(ProcessPlugin);
+    app.register_io_component::<FirstEndpoint>();
+    app.insert_resource(Emission(b"custom"));
+    app.program::<IoProgram>()
+        .add_system(CustomProgramSchedule, emit_configured_write);
+
+    let (_, endpoint) = first_endpoint(&mut app);
+    let process = spawn_io_process(&mut app, &[(FileDescriptor::STDOUT, endpoint)]);
+
+    app.world_mut().run_schedule(CustomProgramSchedule);
+
+    let writes = drain_routed_writes(&mut app);
+    assert_eq!(writes.len(), 1);
+    assert_eq!(writes[0].process(), process);
+    assert_eq!(writes[0].bytes(), b"custom");
+}
+
+#[test]
 fn shared_endpoint_writes_retain_their_source_processes() {
     let mut app = App::new();
     app.add_plugins(ProcessPlugin);
@@ -156,7 +179,14 @@ fn closed_endpoints_do_not_retarget_or_route() {
 
     let multi_endpoint = app.world_mut().spawn((FirstEndpoint, SecondEndpoint)).id();
     let selected = endpoint_handle(&mut app, multi_endpoint);
-    let selected_process = spawn_io_process(&mut app, &[(FileDescriptor::STDOUT, selected)]);
+    let selected_process = spawn_io_process(
+        &mut app,
+        &[
+            (FileDescriptor::STDOUT, selected),
+            (FileDescriptor::STDERR, selected),
+        ],
+    );
+    let alias_process = spawn_io_process(&mut app, &[(FileDescriptor::STDOUT, selected)]);
 
     let (despawned_entity, despawned) = first_endpoint(&mut app);
     let despawned_process = spawn_io_process(&mut app, &[(FileDescriptor::STDOUT, despawned)]);
@@ -164,11 +194,38 @@ fn closed_endpoints_do_not_retarget_or_route() {
     app.world_mut()
         .entity_mut(multi_endpoint)
         .remove::<FirstEndpoint>();
+    assert_eq!(
+        app.world()
+            .entity(selected_process)
+            .get::<ProcessFdTable>()
+            .and_then(|table| table.get(FileDescriptor::STDOUT)),
+        None
+    );
+    assert_eq!(
+        app.world()
+            .entity(selected_process)
+            .get::<ProcessFdTable>()
+            .and_then(|table| table.get(FileDescriptor::STDERR)),
+        None
+    );
+    assert_eq!(
+        app.world()
+            .entity(alias_process)
+            .get::<ProcessFdTable>()
+            .and_then(|table| table.get(FileDescriptor::STDOUT)),
+        None
+    );
+    app.world_mut()
+        .entity_mut(multi_endpoint)
+        .insert(FirstEndpoint);
+
     assert!(app.world_mut().despawn(despawned_entity));
     app.world_mut().write_message(ProcessWriteMsg::stdout(
         selected_process,
-        b"removed".to_vec(),
+        b"removed then reinserted".to_vec(),
     ));
+    app.world_mut()
+        .write_message(ProcessWriteMsg::stdout(alias_process, b"alias".to_vec()));
     app.world_mut().write_message(ProcessWriteMsg::stdout(
         despawned_process,
         b"despawned".to_vec(),

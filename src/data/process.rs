@@ -5,15 +5,17 @@ use bevy::{
     ecs::{
         define_label,
         intern::Interned,
+        lifecycle::HookContext,
         schedule::{InternedScheduleLabel, ScheduleLabel},
         system::SystemId,
+        world::DeferredWorld,
     },
     platform::collections::{HashMap, hash_map::Entry},
 };
 
 use crate::prelude::*;
 
-/// A [`Resource`] which tracks a registered [`Program`] through its
+/// A [`Resource`] which tracks a registered program through its
 /// [`ProgramLabel`].
 #[derive(Resource, Default, Deref, DerefMut, Debug)]
 pub struct Programs(pub(crate) HashMap<InternedProgramLabel, ProgramData>);
@@ -35,13 +37,13 @@ impl Programs {
     }
 }
 
-/// Data associated with a [`Program`]. Specifically, [`SystemId`]s mapped to [`ScheduleLabel`]s.
+/// Data associated with a [`ProgramLabel`]. Specifically, [`SystemId`]s mapped to [`ScheduleLabel`]s.
 /// Note that this currently only accepts **one** system per label.
 // TODO: Store schedules rather than individual systems so a program phase can
 // contain multiple ordered systems.
 pub type ProgramData = HashMap<InternedScheduleLabel, SystemId<In<Entity>, ()>>;
 
-/// Type alias for a [`System`] associated with a [`Program`].
+/// Type alias for a [`System`] associated with a [`ProgramLabel`].
 /// The input is an [`Entity`] pointer to the live [`Process`].
 pub type ProgramSystem = SystemId<In<Entity>, ()>;
 
@@ -49,7 +51,7 @@ pub trait IntoProgramSystem<M>: IntoSystem<In<Entity>, (), M> + 'static {}
 impl<T, M> IntoProgramSystem<M> for T where T: IntoSystem<In<Entity>, (), M> + 'static {}
 
 define_label!(
-    /// Label for a [`Program`] analagous to [`ScheduleLabel`]
+    /// Label for a program, analogous to [`ScheduleLabel`].
     ProgramLabel,
     PROGRAM_LABEL_INTERNER,
     extra_methods: {
@@ -66,19 +68,6 @@ define_label!(
 
 /// Shorthand for [`Interned<dyn ProgramLabel>`]
 pub type InternedProgramLabel = Interned<dyn ProgramLabel>;
-
-/// A [`Program`] is a set of instructions which is instantiated by spawning a
-/// [`Process`]. Where the [`Process`] is the [`Component`], this is the [`System`]
-/// manager.
-pub trait Program: ProgramLabel + Default {
-    /// Signal overriding behavior.
-    /// Returns a HashMap from the signal to its override command.
-    /// By default, SIGINT, SIGQUIT, SIGTERM, and SIGHUP all despawn the entity.
-    /// Use [`ProcessSignalOverride`] to define the schedule.
-    fn trap(&self, _kind: Sig) -> Option<SystemId> {
-        None
-    }
-}
 
 // TODO: Derive macro for ProgramLabel
 #[macro_export]
@@ -101,7 +90,7 @@ macro_rules! impl_program_label {
 /// implement de/initialization behaviors.
 // TODO: Piping? Need file descriptors if so. Probably a relationship (ProcessFd<const CHANNEL: u8)
 #[derive(Component, Clone, Debug)]
-#[component(immutable)]
+#[component(immutable, on_remove = Process::on_remove)]
 pub struct Process {
     /// The [`ProgramLabel`] associated with this [`Process`].
     /// Determines what this process _does_.
@@ -119,7 +108,24 @@ pub struct Process {
     /// stderr
     pub fd2: Entity,
 }
-/// The name of a [`Program`]. This type exists to ensure validity on construction.
+
+impl Process {
+    fn on_remove(mut world: DeferredWorld, context: HookContext) {
+        if let Some(descriptors) = world.get::<ProcessFdTable>(context.entity).cloned()
+            && let Some(mut closing) = world.get_resource_mut::<ClosingProcessIo>()
+        {
+            closing.insert(context.entity, descriptors);
+        }
+
+        world.commands().queue(move |world: &mut World| {
+            if let Ok(mut process) = world.get_entity_mut(context.entity) {
+                process.remove::<(ProcessFdTable, ProcessInputBuffer)>();
+            }
+        });
+    }
+}
+
+/// The name of a program. This type exists to ensure validity on construction.
 /// In particular, program names must not contain whitespace.
 #[derive(Debug, Deref)]
 pub struct ProgramName(&'static str);
@@ -137,18 +143,19 @@ impl ProgramName {
 }
 
 /// Registration options for one program type.
-pub struct AppProgramOpts<'a, T: Program> {
+pub struct AppProgramOpts<'a, T: ProgramLabel + Default> {
     app: &'a mut App,
     marker: PhantomData<T>,
 }
 
-impl<T: Program> AppProgramOpts<'_, T> {
+impl<T: ProgramLabel + Default> AppProgramOpts<'_, T> {
     /// Registers one system in a host schedule for this program.
-    pub fn add_system<M>(
+    pub fn add_system<M, S: ScheduleLabel + Clone>(
         &mut self,
-        schedule: impl ScheduleLabel,
+        schedule: S,
         system: impl IntoProgramSystem<M>,
     ) -> &mut Self {
+        crate::plugins::add_process_schedule(self.app, schedule.clone());
         let id = self.app.register_system(system);
         let program = T::default();
         trace!("Registered program system for {program:?}");
@@ -165,14 +172,14 @@ impl<T: Program> AppProgramOpts<'_, T> {
 /// Adds and configures program types on an [`App`].
 pub trait ProgramAppExt {
     /// Registers `T` without changing systems already configured for it.
-    fn register_program<T: Program>(&mut self) -> &mut Self;
+    fn register_program<T: ProgramLabel + Default>(&mut self) -> &mut Self;
 
     /// Returns the system-registration options for `T`.
-    fn program<T: Program>(&mut self) -> AppProgramOpts<'_, T>;
+    fn program<T: ProgramLabel + Default>(&mut self) -> AppProgramOpts<'_, T>;
 }
 
 impl ProgramAppExt for App {
-    fn register_program<T: Program>(&mut self) -> &mut Self {
+    fn register_program<T: ProgramLabel + Default>(&mut self) -> &mut Self {
         self.world_mut().init_resource::<Programs>();
         let program = T::default();
         trace!("Registered program {program:?}");
@@ -182,7 +189,7 @@ impl ProgramAppExt for App {
         self
     }
 
-    fn program<T: Program>(&mut self) -> AppProgramOpts<'_, T> {
+    fn program<T: ProgramLabel + Default>(&mut self) -> AppProgramOpts<'_, T> {
         self.register_program::<T>();
         AppProgramOpts {
             app: self,

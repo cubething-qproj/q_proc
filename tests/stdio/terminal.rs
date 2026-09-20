@@ -9,7 +9,6 @@ use super::*;
 struct TerminalProgram;
 
 q_proc::impl_program_label!(TerminalProgram, "terminal-program");
-impl Program for TerminalProgram {}
 
 fn write_once(
     In(process_id): In<Entity>,
