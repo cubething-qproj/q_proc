@@ -189,8 +189,9 @@ fn write_constructors_use_one_message_type_and_preserve_bytes() {
 }
 
 #[test]
-fn spawning_a_process_inserts_empty_required_io_components() {
+fn spawning_a_process_inserts_registered_default_io_components() {
     let mut app = App::new();
+    app.add_plugins(ProcessPlugin);
     let process = app
         .world_mut()
         .spawn(Process {
@@ -207,7 +208,7 @@ fn spawning_a_process_inserts_empty_required_io_components() {
         .expect("ProcessFdTable should be inserted with Process");
     let input = process
         .get::<ProcessInputBuffer<Vec<u8>>>()
-        .expect("ProcessInputBuffer should be inserted with Process");
+        .expect("the registered byte lane should insert ProcessInputBuffer");
     assert!(descriptors.get(FileDescriptor::STDIN).is_none());
     assert!(descriptors.get(FileDescriptor::STDOUT).is_none());
     assert!(descriptors.get(FileDescriptor::STDERR).is_none());

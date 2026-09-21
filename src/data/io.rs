@@ -14,6 +14,7 @@ use crate::prelude::*;
 pub trait IoMessage: Send + Sync + 'static {}
 
 impl IoMessage for () {}
+impl IoMessage for String {}
 impl IoMessage for Vec<u8> {}
 
 /// A process-local file descriptor number.
@@ -81,7 +82,7 @@ impl IoMessageType {
 
 /// Message lanes supported by an I/O endpoint component.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct IoMessageTypes {
+pub struct IoMessageLanes {
     /// Messages delivered from the endpoint to a process descriptor.
     pub stdin: IoMessageType,
     /// Messages accepted from a process descriptor by the endpoint.
@@ -90,11 +91,11 @@ pub struct IoMessageTypes {
 
 /// Registered endpoint component types and their stdin/stdout message lanes.
 #[derive(Resource, Debug, Default)]
-pub struct IoComponentCache(HashMap<IoComponentType, IoMessageTypes>);
+pub struct IoComponentCache(HashMap<IoComponentType, IoMessageLanes>);
 
 impl IoComponentCache {
     /// Returns the message lanes registered for endpoint component `T`.
-    pub fn message_types<T: IoComponent>(&self) -> Option<IoMessageTypes> {
+    pub fn message_lanes<T: IoComponent>(&self) -> Option<IoMessageLanes> {
         self.0.get(&IoComponentType::of::<T>()).copied()
     }
 
@@ -202,7 +203,7 @@ impl RegisterIoAppExt for App {
         self.init_resource::<IoComponentCache>();
         self.init_resource::<ClosingProcessIo>();
 
-        let registration = IoMessageTypes {
+        let registration = IoMessageLanes {
             stdin: IoMessageType::of::<T::Stdin>(),
             stdout: IoMessageType::of::<T::Stdout>(),
         };
@@ -229,6 +230,8 @@ impl RegisterIoAppExt for App {
 
         self.add_observer(add_endpoint_capability::<T>);
         self.add_observer(close_removed_endpoint::<T>);
+        // Registration is expected before the app runs. This idempotent backfill
+        // also supports endpoint components spawned earlier during app construction.
         let endpoints = {
             let world = self.world_mut();
             let mut query = world.query_filtered::<Entity, With<T>>();
