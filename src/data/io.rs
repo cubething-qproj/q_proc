@@ -2,7 +2,7 @@
 
 use std::{any::TypeId, collections::VecDeque, sync::Arc};
 
-use bevy::platform::collections::{HashMap, HashSet};
+use bevy::platform::collections::{HashMap, HashSet, hash_map::Entry};
 use thiserror::Error;
 
 use crate::prelude::*;
@@ -13,6 +13,7 @@ use crate::prelude::*;
 /// independent Bevy resources and have no ordering guarantee relative to each other.
 pub trait IoMessage: Send + Sync + 'static {}
 
+impl IoMessage for () {}
 impl IoMessage for Vec<u8> {}
 
 /// A process-local file descriptor number.
@@ -39,20 +40,71 @@ impl FileDescriptor {
 }
 
 /// Implemented by component types that make an entity I/O-capable.
-pub trait IoComponent: Component {}
+pub trait IoComponent: Component {
+    /// Message type delivered from this endpoint to a process descriptor.
+    type Stdin: IoMessage;
+    /// Message type accepted from a process descriptor.
+    type Stdout: IoMessage;
+}
 
-/// Registered component types that may be selected by an [`IoHandle`].
+/// Runtime identity of a registered [`IoComponent`] type.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct IoComponentType(TypeId);
+
+impl IoComponentType {
+    /// Returns the identity for `T`.
+    pub fn of<T: IoComponent>() -> Self {
+        Self(TypeId::of::<T>())
+    }
+
+    /// Returns the underlying Rust type identity.
+    pub const fn type_id(self) -> TypeId {
+        self.0
+    }
+}
+
+/// Runtime identity of a registered [`IoMessage`] type.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct IoMessageType(TypeId);
+
+impl IoMessageType {
+    /// Returns the identity for `T`.
+    pub fn of<T: IoMessage>() -> Self {
+        Self(TypeId::of::<T>())
+    }
+
+    /// Returns the underlying Rust type identity.
+    pub const fn type_id(self) -> TypeId {
+        self.0
+    }
+}
+
+/// Message lanes supported by an I/O endpoint component.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IoMessageTypes {
+    /// Messages delivered from the endpoint to a process descriptor.
+    pub stdin: IoMessageType,
+    /// Messages accepted from a process descriptor by the endpoint.
+    pub stdout: IoMessageType,
+}
+
+/// Registered endpoint component types and their stdin/stdout message lanes.
 #[derive(Resource, Debug, Default)]
-pub struct IoComponentCache(HashMap<TypeId, Option<TypeId>>);
+pub struct IoComponentCache(HashMap<IoComponentType, IoMessageTypes>);
 
 impl IoComponentCache {
+    /// Returns the message lanes registered for endpoint component `T`.
+    pub fn message_types<T: IoComponent>(&self) -> Option<IoMessageTypes> {
+        self.0.get(&IoComponentType::of::<T>()).copied()
+    }
+
     /// Creates a handle when `T` is registered and `entity` currently carries it.
     pub fn handle<T: IoComponent>(
         &self,
         entity: Entity,
         endpoints: &Query<(), With<T>>,
     ) -> Option<IoHandle> {
-        (self.0.contains_key(&TypeId::of::<T>()) && endpoints.contains(entity)).then_some(
+        (self.0.contains_key(&IoComponentType::of::<T>()) && endpoints.contains(entity)).then_some(
             IoHandle {
                 entity,
                 component: TypeId::of::<T>(),
@@ -61,7 +113,8 @@ impl IoComponentCache {
     }
 
     pub(crate) fn is_open(&self, endpoint: IoHandle, endpoints: &Query<&IoCapabilities>) -> bool {
-        self.0.contains_key(&endpoint.component_type_id())
+        self.0
+            .contains_key(&IoComponentType(endpoint.component_type_id()))
             && endpoints
                 .get(endpoint.entity())
                 .is_ok_and(|capabilities| capabilities.contains(&endpoint.component_type_id()))
@@ -69,8 +122,8 @@ impl IoComponentCache {
 
     pub(crate) fn accepts<T: IoMessage>(&self, endpoint: IoHandle) -> bool {
         self.0
-            .get(&endpoint.component_type_id())
-            .is_some_and(|message| message.is_none_or(|message| message == TypeId::of::<T>()))
+            .get(&IoComponentType(endpoint.component_type_id()))
+            .is_some_and(|messages| messages.stdout == IoMessageType::of::<T>())
     }
 }
 
@@ -136,40 +189,53 @@ pub(crate) fn close_tee_outputs<T: IoMessage>(
     }
 }
 
-fn register_io_component<T: IoComponent>(app: &mut App, message: Option<TypeId>) {
-    app.init_resource::<IoComponentCache>();
-    app.init_resource::<ClosingProcessIo>();
-    let inserted = {
-        let mut components = app.world_mut().resource_mut::<IoComponentCache>();
-        match components.0.entry(TypeId::of::<T>()) {
-            bevy::platform::collections::hash_map::Entry::Occupied(mut entry) => {
-                match (*entry.get(), message) {
-                    (None, _) | (Some(_), None) => *entry.get_mut() = None,
-                    (Some(existing), Some(message)) if existing == message => {}
-                    (Some(existing), Some(message)) => panic!(
-                        "I/O component {:?} is already registered for message type {existing:?}, not {message:?}",
-                        TypeId::of::<T>()
-                    ),
-                }
-                false
-            }
-            bevy::platform::collections::hash_map::Entry::Vacant(entry) => {
-                entry.insert(message);
-                true
-            }
-        }
-    };
-    if inserted {
-        app.add_observer(add_endpoint_capability::<T>);
-        app.add_observer(close_removed_endpoint::<T>);
+/// Registers component types that may act as I/O endpoint capabilities.
+pub trait RegisterIoAppExt {
+    /// Registers `T`, including its input and output message lanes.
+    fn register_io_component<T: IoComponent>(&mut self) -> &mut Self;
+}
 
+impl RegisterIoAppExt for App {
+    fn register_io_component<T: IoComponent>(&mut self) -> &mut Self {
+        self.register_io_msg::<T::Stdin>();
+        self.register_io_msg::<T::Stdout>();
+        self.init_resource::<IoComponentCache>();
+        self.init_resource::<ClosingProcessIo>();
+
+        let registration = IoMessageTypes {
+            stdin: IoMessageType::of::<T::Stdin>(),
+            stdout: IoMessageType::of::<T::Stdout>(),
+        };
+        let inserted = {
+            let mut components = self.world_mut().resource_mut::<IoComponentCache>();
+            match components.0.entry(IoComponentType::of::<T>()) {
+                Entry::Occupied(entry) => {
+                    assert_eq!(
+                        *entry.get(),
+                        registration,
+                        "I/O component was registered with different message lanes"
+                    );
+                    false
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(registration);
+                    true
+                }
+            }
+        };
+        if !inserted {
+            return self;
+        }
+
+        self.add_observer(add_endpoint_capability::<T>);
+        self.add_observer(close_removed_endpoint::<T>);
         let endpoints = {
-            let world = app.world_mut();
+            let world = self.world_mut();
             let mut query = world.query_filtered::<Entity, With<T>>();
             query.iter(world).collect::<Vec<_>>()
         };
         for endpoint in endpoints {
-            let mut endpoint = app.world_mut().entity_mut(endpoint);
+            let mut endpoint = self.world_mut().entity_mut(endpoint);
             if !endpoint.contains::<IoCapabilities>() {
                 endpoint.insert(IoCapabilities::default());
             }
@@ -178,30 +244,6 @@ fn register_io_component<T: IoComponent>(app: &mut App, message: Option<TypeId>)
                 .expect("IoCapabilities was just inserted")
                 .insert(TypeId::of::<T>());
         }
-    }
-}
-
-pub(crate) fn register_typed_io_component<C: IoComponent, T: IoMessage>(app: &mut App) {
-    register_io_component::<C>(app, Some(TypeId::of::<T>()));
-}
-
-/// Registers component types that may act as I/O endpoint capabilities.
-pub trait RegisterIoAppExt {
-    /// Registers `T` as an I/O endpoint capability accepting every I/O message type.
-    fn register_io_component<T: IoComponent>(&mut self) -> &mut Self;
-
-    /// Registers endpoint component `C` for exactly one I/O message lane `T`.
-    fn register_io_component_for<C: IoComponent, T: IoMessage>(&mut self) -> &mut Self;
-}
-
-impl RegisterIoAppExt for App {
-    fn register_io_component<T: IoComponent>(&mut self) -> &mut Self {
-        register_io_component::<T>(self, None);
-        self
-    }
-
-    fn register_io_component_for<C: IoComponent, T: IoMessage>(&mut self) -> &mut Self {
-        register_typed_io_component::<C, T>(self);
         self
     }
 }
@@ -269,7 +311,7 @@ impl ProcessFdTable {
 
 /// A write requested by a program through one of its descriptors.
 #[derive(Message, Clone, Debug)]
-pub struct ProcessWriteMsg<T: IoMessage = Vec<u8>> {
+pub struct ProcessWriteMsg<T: IoMessage> {
     /// Process requesting the write.
     pub process: Entity,
     /// Descriptor through which to write.
@@ -307,11 +349,6 @@ impl<T: IoMessage> ProcessWriteMsg<T> {
         &self.payload
     }
 
-    /// Returns a shared pointer to the payload.
-    pub fn shared(&self) -> Arc<T> {
-        Arc::clone(&self.payload)
-    }
-
     pub(crate) fn into_shared(self) -> Arc<T> {
         self.payload
     }
@@ -319,7 +356,7 @@ impl<T: IoMessage> ProcessWriteMsg<T> {
 
 /// A process write whose descriptor has been resolved to an endpoint.
 #[derive(Message, Clone, Debug)]
-pub struct EndpointWriteMsg<T: IoMessage = Vec<u8>> {
+pub struct EndpointWriteMsg<T: IoMessage> {
     process: Entity,
     fd: FileDescriptor,
     endpoint: IoHandle,
@@ -360,16 +397,11 @@ impl<T: IoMessage> EndpointWriteMsg<T> {
     pub fn payload(&self) -> &T {
         &self.payload
     }
-
-    /// Returns a shared pointer to the payload.
-    pub fn shared(&self) -> Arc<T> {
-        Arc::clone(&self.payload)
-    }
 }
 
 /// A message made available to one process descriptor by an endpoint adapter.
 #[derive(Message, Clone, Debug)]
-pub struct ProcessInputMsg<T: IoMessage = Vec<u8>> {
+pub struct ProcessInputMsg<T: IoMessage> {
     /// Process receiving the message.
     pub process: Entity,
     /// Descriptor receiving the message.
@@ -405,11 +437,6 @@ impl<T: IoMessage> ProcessInputMsg<T> {
         &self.payload
     }
 
-    /// Returns a shared pointer to the payload.
-    pub fn shared(&self) -> Arc<T> {
-        Arc::clone(&self.payload)
-    }
-
     pub(crate) fn into_shared(self) -> Arc<T> {
         self.payload
     }
@@ -419,7 +446,7 @@ impl<T: IoMessage> ProcessInputMsg<T> {
 ///
 /// Queued payloads remain immutable and shared so tee fanout does not copy `T`.
 #[derive(Component, Clone, Debug, Deref, DerefMut)]
-pub struct ProcessInputBuffer<T: IoMessage = Vec<u8>>(HashMap<FileDescriptor, VecDeque<Arc<T>>>);
+pub struct ProcessInputBuffer<T: IoMessage>(HashMap<FileDescriptor, VecDeque<Arc<T>>>);
 
 impl<T: IoMessage> Default for ProcessInputBuffer<T> {
     fn default() -> Self {

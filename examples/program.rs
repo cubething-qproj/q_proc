@@ -16,7 +16,10 @@ impl_program_label!(MyProgram, "my-program");
 #[derive(Component)]
 struct LogEndpoint;
 
-impl IoComponent for LogEndpoint {}
+impl IoComponent for LogEndpoint {
+    type Stdin = ();
+    type Stdout = Vec<u8>;
+}
 
 fn main() {
     let mut app = App::new();

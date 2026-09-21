@@ -20,12 +20,18 @@ q_proc::impl_program_label!(IoProgram, "io-program");
 #[derive(Component)]
 struct FirstEndpoint;
 
-impl IoComponent for FirstEndpoint {}
+impl IoComponent for FirstEndpoint {
+    type Stdin = ();
+    type Stdout = Vec<u8>;
+}
 
 #[derive(Component)]
 struct SecondEndpoint;
 
-impl IoComponent for SecondEndpoint {}
+impl IoComponent for SecondEndpoint {
+    type Stdin = ();
+    type Stdout = Vec<u8>;
+}
 
 fn io_handle<T: IoComponent>(app: &mut App, entity: Entity) -> IoHandle {
     let world = app.world_mut();

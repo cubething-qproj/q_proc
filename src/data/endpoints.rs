@@ -10,10 +10,10 @@ use crate::prelude::*;
 /// or EOF.
 #[derive(Component, Clone, Copy, Debug)]
 #[component(immutable)]
-pub struct PipeEndpoint<T: IoMessage = Vec<u8>> {
+pub struct PipeEndpoint<T: IoMessage> {
     process: Entity,
     fd: FileDescriptor,
-    marker: PhantomData<fn() -> T>,
+    marker: PhantomData<T>,
 }
 
 impl<T: IoMessage> PipeEndpoint<T> {
@@ -37,15 +37,18 @@ impl<T: IoMessage> PipeEndpoint<T> {
     }
 }
 
-impl<T: IoMessage> IoComponent for PipeEndpoint<T> {}
+impl<T: IoMessage> IoComponent for PipeEndpoint<T> {
+    type Stdin = T;
+    type Stdout = T;
+}
 
 /// An endpoint that duplicates each message of type `T` to configured downstream handles.
 ///
 /// Outputs are visited in declaration order. Nested tees are not yet supported.
 #[derive(Component, Clone, Debug)]
-pub struct TeeEndpoint<T: IoMessage = Vec<u8>> {
+pub struct TeeEndpoint<T: IoMessage> {
     outputs: Vec<IoHandle>,
-    marker: PhantomData<fn() -> T>,
+    marker: PhantomData<T>,
 }
 
 impl<T: IoMessage> Default for TeeEndpoint<T> {
@@ -77,4 +80,7 @@ impl<T: IoMessage> TeeEndpoint<T> {
     }
 }
 
-impl<T: IoMessage> IoComponent for TeeEndpoint<T> {}
+impl<T: IoMessage> IoComponent for TeeEndpoint<T> {
+    type Stdin = T;
+    type Stdout = T;
+}

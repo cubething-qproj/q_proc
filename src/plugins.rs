@@ -76,8 +76,8 @@ impl RegisterIoMessageAppExt for App {
         self.add_message::<ProcessWriteMsg<T>>();
         self.add_message::<EndpointWriteMsg<T>>();
         self.add_message::<ProcessInputMsg<T>>();
-        crate::data::io::register_typed_io_component::<PipeEndpoint<T>, T>(self);
-        crate::data::io::register_typed_io_component::<TeeEndpoint<T>, T>(self);
+        self.register_io_component::<PipeEndpoint<T>>();
+        self.register_io_component::<TeeEndpoint<T>>();
         self.add_observer(add_process_input_buffer::<T>);
         self.add_observer(remove_process_input_buffer::<T>);
         self.add_observer(close_tee_outputs::<T>);

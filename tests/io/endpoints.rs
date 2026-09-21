@@ -199,6 +199,14 @@ struct OtherMessage;
 
 impl IoMessage for OtherMessage {}
 
+#[derive(Component)]
+struct CustomEndpoint;
+
+impl IoComponent for CustomEndpoint {
+    type Stdin = ();
+    type Stdout = CustomMessage;
+}
+
 #[test]
 fn custom_messages_route_through_typed_pipes_and_share_tee_payloads() {
     let mut app = App::new();
@@ -261,13 +269,12 @@ fn custom_messages_route_through_typed_pipes_and_share_tee_payloads() {
         .world_mut()
         .resource_mut::<Messages<EndpointWriteMsg<CustomMessage>>>()
         .drain()
-        .map(|message| message.shared())
         .collect::<Vec<_>>();
     assert_eq!(routed.len(), 3);
     assert!(
         routed[1..]
             .iter()
-            .all(|payload| std::sync::Arc::ptr_eq(&routed[0], payload))
+            .all(|message| std::ptr::eq(routed[0].payload(), message.payload()))
     );
 
     app.world_mut().run_schedule(First);
@@ -304,12 +311,11 @@ fn custom_messages_route_through_typed_pipes_and_share_tee_payloads() {
 fn typed_external_endpoint_rejects_a_different_message_lane() {
     let mut app = App::new();
     app.add_plugins(ProcessPlugin);
-    app.register_io_msg::<CustomMessage>()
-        .register_io_msg::<OtherMessage>()
-        .register_io_component_for::<FirstEndpoint, CustomMessage>();
+    app.register_io_msg::<OtherMessage>()
+        .register_io_component::<CustomEndpoint>();
 
-    let endpoint_entity = app.world_mut().spawn(FirstEndpoint).id();
-    let endpoint = io_handle::<FirstEndpoint>(&mut app, endpoint_entity);
+    let endpoint_entity = app.world_mut().spawn(CustomEndpoint).id();
+    let endpoint = io_handle::<CustomEndpoint>(&mut app, endpoint_entity);
     let process = spawn_io_process(&mut app, &[(FileDescriptor::STDOUT, endpoint)]);
 
     app.world_mut()
