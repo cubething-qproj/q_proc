@@ -20,12 +20,18 @@ q_proc::impl_program_label!(IoProgram, "io-program");
 #[derive(Component)]
 struct FirstEndpoint;
 
-impl IoComponent for FirstEndpoint {}
+impl IoComponent for FirstEndpoint {
+    type Stdin = ();
+    type Stdout = Vec<u8>;
+}
 
 #[derive(Component)]
 struct SecondEndpoint;
 
-impl IoComponent for SecondEndpoint {}
+impl IoComponent for SecondEndpoint {
+    type Stdin = ();
+    type Stdout = Vec<u8>;
+}
 
 fn io_handle<T: IoComponent>(app: &mut App, entity: Entity) -> IoHandle {
     let world = app.world_mut();
@@ -62,7 +68,7 @@ fn spawn_io_process(app: &mut App, descriptors: &[(FileDescriptor, IoHandle)]) -
                 environ: HashMap::new(),
             },
             table,
-            ProcessInputBuffer::default(),
+            ProcessInputBuffer::<Vec<u8>>::default(),
         ))
         .id()
 }
@@ -124,7 +130,7 @@ fn handles_select_one_capability_on_a_multi_capability_entity() {
 }
 
 #[test]
-fn handles_and_routed_writes_are_opaque_to_reflection() {
+fn handles_are_opaque_to_reflection() {
     let mut app = App::new();
     app.register_io_component::<FirstEndpoint>();
     let endpoint = app.world_mut().spawn(FirstEndpoint).id();
@@ -136,13 +142,6 @@ fn handles_and_routed_writes_are_opaque_to_reflection() {
     forged_handle.insert("entity", endpoint);
     forged_handle.insert("component", TypeId::of::<FirstEndpoint>());
     assert!(IoHandle::from_reflect(&forged_handle).is_none());
-
-    let mut forged_write = DynamicStruct::default();
-    forged_write.insert("process", endpoint);
-    forged_write.insert("fd", FileDescriptor::STDOUT);
-    forged_write.insert("endpoint", handle);
-    forged_write.insert("bytes", b"forged".to_vec());
-    assert!(EndpointWriteMsg::from_reflect(&forged_write).is_none());
 }
 
 #[test]
@@ -175,22 +174,24 @@ fn descriptor_tables_support_assignment_closure_and_duplication() {
 fn write_constructors_use_one_message_type_and_preserve_bytes() {
     let process = Entity::from_raw_u32(7).expect("the test entity index should be valid");
 
-    let stdout = ProcessWriteMsg::stdout(process, b"out".to_vec());
-    let stderr = ProcessWriteMsg::stderr(process, b"err".to_vec());
-    let custom = ProcessWriteMsg::new(process, FileDescriptor::new(9), b"custom".to_vec());
+    let stdout = ProcessWriteMsg::<Vec<u8>>::stdout(process, b"out".to_vec());
+    let stderr = ProcessWriteMsg::<Vec<u8>>::stderr(process, b"err".to_vec());
+    let custom =
+        ProcessWriteMsg::<Vec<u8>>::new(process, FileDescriptor::new(9), b"custom".to_vec());
 
     assert_eq!(stdout.process, process);
     assert_eq!(stdout.fd, FileDescriptor::STDOUT);
-    assert_eq!(stdout.bytes, b"out");
+    assert_eq!(stdout.payload(), b"out");
     assert_eq!(stderr.fd, FileDescriptor::STDERR);
-    assert_eq!(stderr.bytes, b"err");
+    assert_eq!(stderr.payload(), b"err");
     assert_eq!(custom.fd, FileDescriptor::new(9));
-    assert_eq!(custom.bytes, b"custom");
+    assert_eq!(custom.payload(), b"custom");
 }
 
 #[test]
-fn spawning_a_process_inserts_empty_required_io_components() {
+fn spawning_a_process_inserts_registered_default_io_components() {
     let mut app = App::new();
+    app.add_plugins(ProcessPlugin);
     let process = app
         .world_mut()
         .spawn(Process {
@@ -206,8 +207,8 @@ fn spawning_a_process_inserts_empty_required_io_components() {
         .get::<ProcessFdTable>()
         .expect("ProcessFdTable should be inserted with Process");
     let input = process
-        .get::<ProcessInputBuffer>()
-        .expect("ProcessInputBuffer should be inserted with Process");
+        .get::<ProcessInputBuffer<Vec<u8>>>()
+        .expect("the registered byte lane should insert ProcessInputBuffer");
     assert!(descriptors.get(FileDescriptor::STDIN).is_none());
     assert!(descriptors.get(FileDescriptor::STDOUT).is_none());
     assert!(descriptors.get(FileDescriptor::STDERR).is_none());
@@ -216,7 +217,7 @@ fn spawning_a_process_inserts_empty_required_io_components() {
 
 #[test]
 fn input_buffers_are_empty_until_the_demultiplexer_appends_bytes() {
-    let input = ProcessInputBuffer::default();
+    let input = ProcessInputBuffer::<Vec<u8>>::default();
 
     assert!(input.is_empty());
     assert!(input.get(&FileDescriptor::STDIN).is_none());

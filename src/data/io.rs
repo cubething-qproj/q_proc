@@ -1,11 +1,21 @@
 //! Process-local descriptors and endpoint-neutral I/O messages.
 
-use std::{any::TypeId, collections::VecDeque};
+use std::{any::TypeId, collections::VecDeque, sync::Arc};
 
-use bevy::platform::collections::{HashMap, HashSet};
+use bevy::platform::collections::{HashMap, HashSet, hash_map::Entry};
 use thiserror::Error;
 
 use crate::prelude::*;
+
+/// A payload type carried by a process I/O lane.
+///
+/// Messages retain their order within one `T` lane. Different message types use
+/// independent Bevy resources and have no ordering guarantee relative to each other.
+pub trait IoMessage: Send + Sync + 'static {}
+
+impl IoMessage for () {}
+impl IoMessage for String {}
+impl IoMessage for Vec<u8> {}
 
 /// A process-local file descriptor number.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Reflect)]
@@ -31,30 +41,90 @@ impl FileDescriptor {
 }
 
 /// Implemented by component types that make an entity I/O-capable.
-pub trait IoComponent: Component {}
+pub trait IoComponent: Component {
+    /// Message type delivered from this endpoint to a process descriptor.
+    type Stdin: IoMessage;
+    /// Message type accepted from a process descriptor.
+    type Stdout: IoMessage;
+}
 
-/// Registered component types that may be selected by an [`IoHandle`].
-#[derive(Resource, Debug, Default, Deref)]
-pub struct IoComponentCache(HashSet<TypeId>);
+/// Runtime identity of a registered [`IoComponent`] type.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct IoComponentType(TypeId);
+
+impl IoComponentType {
+    /// Returns the identity for `T`.
+    pub fn of<T: IoComponent>() -> Self {
+        Self(TypeId::of::<T>())
+    }
+
+    /// Returns the underlying Rust type identity.
+    pub const fn type_id(self) -> TypeId {
+        self.0
+    }
+}
+
+/// Runtime identity of a registered [`IoMessage`] type.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct IoMessageType(TypeId);
+
+impl IoMessageType {
+    /// Returns the identity for `T`.
+    pub fn of<T: IoMessage>() -> Self {
+        Self(TypeId::of::<T>())
+    }
+
+    /// Returns the underlying Rust type identity.
+    pub const fn type_id(self) -> TypeId {
+        self.0
+    }
+}
+
+/// Message lanes supported by an I/O endpoint component.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IoMessageLanes {
+    /// Messages delivered from the endpoint to a process descriptor.
+    pub stdin: IoMessageType,
+    /// Messages accepted from a process descriptor by the endpoint.
+    pub stdout: IoMessageType,
+}
+
+/// Registered endpoint component types and their stdin/stdout message lanes.
+#[derive(Resource, Debug, Default)]
+pub struct IoComponentCache(HashMap<IoComponentType, IoMessageLanes>);
 
 impl IoComponentCache {
+    /// Returns the message lanes registered for endpoint component `T`.
+    pub fn message_lanes<T: IoComponent>(&self) -> Option<IoMessageLanes> {
+        self.0.get(&IoComponentType::of::<T>()).copied()
+    }
+
     /// Creates a handle when `T` is registered and `entity` currently carries it.
     pub fn handle<T: IoComponent>(
         &self,
         entity: Entity,
         endpoints: &Query<(), With<T>>,
     ) -> Option<IoHandle> {
-        (self.0.contains(&TypeId::of::<T>()) && endpoints.contains(entity)).then_some(IoHandle {
-            entity,
-            component: TypeId::of::<T>(),
-        })
+        (self.0.contains_key(&IoComponentType::of::<T>()) && endpoints.contains(entity)).then_some(
+            IoHandle {
+                entity,
+                component: TypeId::of::<T>(),
+            },
+        )
     }
 
     pub(crate) fn is_open(&self, endpoint: IoHandle, endpoints: &Query<&IoCapabilities>) -> bool {
-        self.contains(&endpoint.component_type_id())
+        self.0
+            .contains_key(&IoComponentType(endpoint.component_type_id()))
             && endpoints
                 .get(endpoint.entity())
                 .is_ok_and(|capabilities| capabilities.contains(&endpoint.component_type_id()))
+    }
+
+    pub(crate) fn accepts<T: IoMessage>(&self, endpoint: IoHandle) -> bool {
+        self.0
+            .get(&IoComponentType(endpoint.component_type_id()))
+            .is_some_and(|messages| messages.stdout == IoMessageType::of::<T>())
     }
 }
 
@@ -69,6 +139,12 @@ pub(crate) struct IoCapabilities(HashSet<TypeId>);
 #[derive(Resource, Default, Deref, DerefMut)]
 pub(crate) struct ClosingProcessIo(HashMap<Entity, ProcessFdTable>);
 
+#[derive(Event)]
+pub(crate) struct EndpointClosed {
+    entity: Entity,
+    component: TypeId,
+}
+
 fn add_endpoint_capability<T: IoComponent>(added: On<Add, T>, mut commands: Commands) {
     let component = TypeId::of::<T>();
     commands
@@ -82,9 +158,9 @@ fn add_endpoint_capability<T: IoComponent>(added: On<Add, T>, mut commands: Comm
 
 fn close_removed_endpoint<T: IoComponent>(
     removed: On<Remove, T>,
+    mut commands: Commands,
     mut endpoints: Query<&mut IoCapabilities>,
     mut descriptors: Query<&mut ProcessFdTable>,
-    mut tees: Query<&mut TeeEndpoint>,
     mut closing: ResMut<ClosingProcessIo>,
 ) {
     let endpoint = removed.entity;
@@ -95,48 +171,81 @@ fn close_removed_endpoint<T: IoComponent>(
     for mut table in &mut descriptors {
         table.close_endpoint(endpoint, component);
     }
-    for mut tee in &mut tees {
-        tee.close_output(endpoint, component);
-    }
     for table in closing.values_mut() {
         table.close_endpoint(endpoint, component);
+    }
+    commands.trigger(EndpointClosed {
+        entity: endpoint,
+        component,
+    });
+}
+
+pub(crate) fn close_tee_outputs<T: IoMessage>(
+    closed: On<EndpointClosed>,
+    mut tees: Query<&mut TeeEndpoint<T>>,
+) {
+    let closed = closed.event();
+    for mut tee in &mut tees {
+        tee.close_output(closed.entity, closed.component);
     }
 }
 
 /// Registers component types that may act as I/O endpoint capabilities.
 pub trait RegisterIoAppExt {
-    /// Registers `T` as an I/O endpoint capability.
+    /// Registers `T`, including its input and output message lanes.
     fn register_io_component<T: IoComponent>(&mut self) -> &mut Self;
 }
 
 impl RegisterIoAppExt for App {
     fn register_io_component<T: IoComponent>(&mut self) -> &mut Self {
+        self.register_io_msg::<T::Stdin>();
+        self.register_io_msg::<T::Stdout>();
         self.init_resource::<IoComponentCache>();
         self.init_resource::<ClosingProcessIo>();
-        let inserted = self
-            .world_mut()
-            .resource_mut::<IoComponentCache>()
-            .0
-            .insert(TypeId::of::<T>());
-        if inserted {
-            self.add_observer(add_endpoint_capability::<T>);
-            self.add_observer(close_removed_endpoint::<T>);
 
-            let endpoints = {
-                let world = self.world_mut();
-                let mut query = world.query_filtered::<Entity, With<T>>();
-                query.iter(world).collect::<Vec<_>>()
-            };
-            for endpoint in endpoints {
-                let mut endpoint = self.world_mut().entity_mut(endpoint);
-                if !endpoint.contains::<IoCapabilities>() {
-                    endpoint.insert(IoCapabilities::default());
+        let registration = IoMessageLanes {
+            stdin: IoMessageType::of::<T::Stdin>(),
+            stdout: IoMessageType::of::<T::Stdout>(),
+        };
+        let inserted = {
+            let mut components = self.world_mut().resource_mut::<IoComponentCache>();
+            match components.0.entry(IoComponentType::of::<T>()) {
+                Entry::Occupied(entry) => {
+                    assert_eq!(
+                        *entry.get(),
+                        registration,
+                        "I/O component was registered with different message lanes"
+                    );
+                    false
                 }
-                endpoint
-                    .get_mut::<IoCapabilities>()
-                    .expect("IoCapabilities was just inserted")
-                    .insert(TypeId::of::<T>());
+                Entry::Vacant(entry) => {
+                    entry.insert(registration);
+                    true
+                }
             }
+        };
+        if !inserted {
+            return self;
+        }
+
+        self.add_observer(add_endpoint_capability::<T>);
+        self.add_observer(close_removed_endpoint::<T>);
+        // Registration is expected before the app runs. This idempotent backfill
+        // also supports endpoint components spawned earlier during app construction.
+        let endpoints = {
+            let world = self.world_mut();
+            let mut query = world.query_filtered::<Entity, With<T>>();
+            query.iter(world).collect::<Vec<_>>()
+        };
+        for endpoint in endpoints {
+            let mut endpoint = self.world_mut().entity_mut(endpoint);
+            if !endpoint.contains::<IoCapabilities>() {
+                endpoint.insert(IoCapabilities::default());
+            }
+            endpoint
+                .get_mut::<IoCapabilities>()
+                .expect("IoCapabilities was just inserted")
+                .insert(TypeId::of::<T>());
         }
         self
     }
@@ -204,59 +313,71 @@ impl ProcessFdTable {
 }
 
 /// A write requested by a program through one of its descriptors.
-#[derive(Message, Clone, Debug, Reflect)]
-pub struct ProcessWriteMsg {
+#[derive(Message, Clone, Debug)]
+pub struct ProcessWriteMsg<T: IoMessage> {
     /// Process requesting the write.
     pub process: Entity,
     /// Descriptor through which to write.
     pub fd: FileDescriptor,
-    /// Uninterpreted bytes to write.
-    pub bytes: Vec<u8>,
+    payload: Arc<T>,
 }
 
-impl ProcessWriteMsg {
+impl<T: IoMessage> ProcessWriteMsg<T> {
     /// Creates a process write through `fd`.
-    pub fn new(process: Entity, fd: FileDescriptor, bytes: impl Into<Vec<u8>>) -> Self {
+    pub fn new(process: Entity, fd: FileDescriptor, payload: T) -> Self {
+        Self::from_shared(process, fd, Arc::new(payload))
+    }
+
+    /// Creates a process write through `fd` from an existing shared payload.
+    pub fn from_shared(process: Entity, fd: FileDescriptor, payload: Arc<T>) -> Self {
         Self {
             process,
             fd,
-            bytes: bytes.into(),
+            payload,
         }
     }
 
     /// Creates a standard-output write.
-    pub fn stdout(process: Entity, bytes: impl Into<Vec<u8>>) -> Self {
-        Self::new(process, FileDescriptor::STDOUT, bytes)
+    pub fn stdout(process: Entity, payload: T) -> Self {
+        Self::new(process, FileDescriptor::STDOUT, payload)
     }
 
     /// Creates a standard-error write.
-    pub fn stderr(process: Entity, bytes: impl Into<Vec<u8>>) -> Self {
-        Self::new(process, FileDescriptor::STDERR, bytes)
+    pub fn stderr(process: Entity, payload: T) -> Self {
+        Self::new(process, FileDescriptor::STDERR, payload)
+    }
+
+    /// Returns the payload.
+    pub fn payload(&self) -> &T {
+        &self.payload
+    }
+
+    pub(crate) fn into_shared(self) -> Arc<T> {
+        self.payload
     }
 }
 
 /// A process write whose descriptor has been resolved to an endpoint.
-#[derive(Message, Clone, Debug, Reflect)]
-#[reflect(opaque)]
-pub struct EndpointWriteMsg {
+#[derive(Message, Clone, Debug)]
+pub struct EndpointWriteMsg<T: IoMessage> {
     process: Entity,
     fd: FileDescriptor,
     endpoint: IoHandle,
-    bytes: Vec<u8>,
+    payload: Arc<T>,
 }
 
-impl EndpointWriteMsg {
+impl<T: IoMessage> EndpointWriteMsg<T> {
     pub(crate) fn new(
         process: Entity,
         fd: FileDescriptor,
         endpoint: IoHandle,
-        bytes: Vec<u8>,
+        payload: Arc<T>,
     ) -> Self {
         Self {
             process,
             fd,
             endpoint,
-            bytes,
+            payload,
         }
     }
 
@@ -275,25 +396,63 @@ impl EndpointWriteMsg {
         self.endpoint
     }
 
-    /// Returns the uninterpreted bytes to write.
-    pub fn bytes(&self) -> &[u8] {
-        &self.bytes
+    /// Returns the payload.
+    pub fn payload(&self) -> &T {
+        &self.payload
     }
 }
 
-/// Bytes made available to one process descriptor by an endpoint adapter.
-#[derive(Message, Clone, Debug, Reflect)]
-pub struct ProcessInputMsg {
-    /// Process receiving the bytes.
+/// A message made available to one process descriptor by an endpoint adapter.
+#[derive(Message, Clone, Debug)]
+pub struct ProcessInputMsg<T: IoMessage> {
+    /// Process receiving the message.
     pub process: Entity,
-    /// Descriptor receiving the bytes.
+    /// Descriptor receiving the message.
     pub fd: FileDescriptor,
-    /// Endpoint capability that supplied the bytes.
+    /// Endpoint capability that supplied the message.
     pub endpoint: IoHandle,
-    /// Uninterpreted input bytes.
-    pub bytes: Vec<u8>,
+    payload: Arc<T>,
+}
+
+impl<T: IoMessage> ProcessInputMsg<T> {
+    /// Creates process input from an owned payload.
+    pub fn new(process: Entity, fd: FileDescriptor, endpoint: IoHandle, payload: T) -> Self {
+        Self::from_shared(process, fd, endpoint, Arc::new(payload))
+    }
+
+    /// Creates process input from an existing shared payload.
+    pub fn from_shared(
+        process: Entity,
+        fd: FileDescriptor,
+        endpoint: IoHandle,
+        payload: Arc<T>,
+    ) -> Self {
+        Self {
+            process,
+            fd,
+            endpoint,
+            payload,
+        }
+    }
+
+    /// Returns the payload.
+    pub fn payload(&self) -> &T {
+        &self.payload
+    }
+
+    pub(crate) fn into_shared(self) -> Arc<T> {
+        self.payload
+    }
 }
 
 /// Process-local input queues populated before program execution.
-#[derive(Component, Clone, Debug, Default, Deref, DerefMut, Reflect)]
-pub struct ProcessInputBuffer(HashMap<FileDescriptor, VecDeque<u8>>);
+///
+/// Queued payloads remain immutable and shared so tee fanout does not copy `T`.
+#[derive(Component, Clone, Debug, Deref, DerefMut)]
+pub struct ProcessInputBuffer<T: IoMessage>(HashMap<FileDescriptor, VecDeque<Arc<T>>>);
+
+impl<T: IoMessage> Default for ProcessInputBuffer<T> {
+    fn default() -> Self {
+        Self(HashMap::default())
+    }
+}

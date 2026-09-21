@@ -16,7 +16,10 @@ impl_program_label!(MyProgram, "my-program");
 #[derive(Component)]
 struct LogEndpoint;
 
-impl IoComponent for LogEndpoint {}
+impl IoComponent for LogEndpoint {
+    type Stdin = ();
+    type Stdout = String;
+}
 
 fn main() {
     let mut app = App::new();
@@ -59,24 +62,24 @@ fn main() {
 
 fn write_hello(
     In(process): In<Entity>,
-    mut writes: MessageWriter<ProcessWriteMsg>,
+    mut writes: MessageWriter<ProcessWriteMsg<String>>,
     mut timer: Local<Option<Timer>>,
     time: Res<Time>,
 ) {
     let timer = timer.get_or_insert_with(|| Timer::from_seconds(1.0, TimerMode::Repeating));
     timer.tick(time.delta());
     if timer.just_finished() {
-        writes.write(ProcessWriteMsg::stdout(
+        writes.write(ProcessWriteMsg::<String>::stdout(
             process,
-            format!("Hello from process {process}!\n").into_bytes(),
+            format!("Hello from process {process}!"),
         ));
     }
 }
 
-fn log_endpoint_writes(mut writes: MessageReader<EndpointWriteMsg>) {
+fn log_endpoint_writes(mut writes: MessageReader<EndpointWriteMsg<String>>) {
     for write in writes.read() {
         if write.endpoint().component_type_id() == TypeId::of::<LogEndpoint>() {
-            info!("{}", String::from_utf8_lossy(write.bytes()));
+            info!("{}", write.payload());
         }
     }
 }

@@ -88,7 +88,7 @@ macro_rules! impl_program_label {
 /// The process dies when this component is removed.
 #[derive(Component, Clone, Debug)]
 #[component(immutable, on_remove = Process::on_remove)]
-#[require(ProcessFdTable, ProcessInputBuffer)]
+#[require(ProcessFdTable)]
 pub struct Process {
     /// The [`ProgramLabel`] associated with this [`Process`].
     /// Determines what this process _does_.
@@ -111,7 +111,7 @@ impl Process {
 
         world.commands().queue(move |world: &mut World| {
             if let Ok(mut process) = world.get_entity_mut(context.entity) {
-                process.remove::<(ProcessFdTable, ProcessInputBuffer)>();
+                process.remove::<ProcessFdTable>();
             }
         });
     }

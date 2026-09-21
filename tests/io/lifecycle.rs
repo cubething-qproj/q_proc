@@ -1,5 +1,9 @@
 use super::*;
 
+type ByteWrite = ProcessWriteMsg<Vec<u8>>;
+type ByteEndpointWrite = EndpointWriteMsg<Vec<u8>>;
+type ByteInputBuffer = ProcessInputBuffer<Vec<u8>>;
+
 #[derive(Resource)]
 struct ProcessToRemove(Entity);
 
@@ -10,9 +14,9 @@ fn remove_process(mut commands: Commands, process: Res<ProcessToRemove>) {
 fn write_then_exit(
     In(process): In<Entity>,
     mut commands: Commands,
-    mut writes: MessageWriter<ProcessWriteMsg>,
+    mut writes: MessageWriter<ByteWrite>,
 ) {
-    writes.write(ProcessWriteMsg::stdout(process, b"final".to_vec()));
+    writes.write(ByteWrite::stdout(process, b"final".to_vec()));
     commands.entity(process).remove::<Process>();
 }
 
@@ -31,24 +35,24 @@ fn final_write_routes_before_process_io_cleanup() {
 
     let writes = app
         .world_mut()
-        .resource_mut::<Messages<EndpointWriteMsg>>()
+        .resource_mut::<Messages<ByteEndpointWrite>>()
         .drain()
         .collect::<Vec<_>>();
     assert_eq!(writes.len(), 1);
     assert_eq!(writes[0].process(), process);
-    assert_eq!(writes[0].bytes(), b"final");
+    assert_eq!(writes[0].payload(), b"final");
 
     let process_entity = app.world().entity(process);
     assert!(!process_entity.contains::<Process>());
     assert!(!process_entity.contains::<ProcessFdTable>());
-    assert!(!process_entity.contains::<ProcessInputBuffer>());
+    assert!(!process_entity.contains::<ByteInputBuffer>());
 
     app.world_mut()
-        .write_message(ProcessWriteMsg::stdout(process, b"late".to_vec()));
+        .write_message(ByteWrite::stdout(process, b"late".to_vec()));
     app.world_mut().run_schedule(Update);
     assert!(
         app.world_mut()
-            .resource_mut::<Messages<EndpointWriteMsg>>()
+            .resource_mut::<Messages<ByteEndpointWrite>>()
             .drain()
             .next()
             .is_none()
@@ -71,7 +75,7 @@ fn removal_after_program_schedules_still_cleans_process_io() {
     let process = app.world().entity(process);
     assert!(!process.contains::<Process>());
     assert!(!process.contains::<ProcessFdTable>());
-    assert!(!process.contains::<ProcessInputBuffer>());
+    assert!(!process.contains::<ByteInputBuffer>());
 }
 
 #[test]
@@ -85,13 +89,13 @@ fn process_despawn_needs_no_shell_cleanup() {
     assert!(app.world_mut().despawn(process));
 
     app.world_mut()
-        .write_message(ProcessWriteMsg::stdout(process, b"late".to_vec()));
+        .write_message(ByteWrite::stdout(process, b"late".to_vec()));
     app.world_mut().run_schedule(Update);
 
     assert!(app.world().get_entity(process).is_err());
     assert!(
         app.world_mut()
-            .resource_mut::<Messages<EndpointWriteMsg>>()
+            .resource_mut::<Messages<ByteEndpointWrite>>()
             .drain()
             .next()
             .is_none()
