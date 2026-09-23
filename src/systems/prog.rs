@@ -11,7 +11,7 @@ pub(crate) fn run_programs(
 ) {
     for (entity, process) in &processes {
         trace!("{schedule:?}: Running {:?}", process.prog.name());
-        let program = c!(programs.0.get(&process.prog));
+        let program = c!(programs.get(process.prog));
         let system = *cq!(program.get(&schedule));
         let expected_program = process.prog;
         commands.queue(move |world: &mut World| {

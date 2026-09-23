@@ -1,10 +1,9 @@
 //! Basic data types required for process execution
-use std::marker::PhantomData;
+use std::{any::TypeId, borrow::Borrow, marker::PhantomData};
 
 use bevy::{
     ecs::{
-        define_label,
-        intern::Interned,
+        intern::{Interned, Interner},
         lifecycle::HookContext,
         schedule::{InternedScheduleLabel, ScheduleLabel},
         system::SystemId,
@@ -15,25 +14,58 @@ use bevy::{
 
 use crate::prelude::*;
 
-/// A [`Resource`] which tracks a registered program through its
-/// [`ProgramLabel`].
-#[derive(Resource, Default, Deref, DerefMut, Debug)]
-pub struct Programs(pub(crate) HashMap<InternedProgramLabel, ProgramData>);
+/// Registered programs indexed by their validated command name.
+#[derive(Resource, Default, Debug)]
+pub struct Programs(HashMap<ProgramName, RegisteredProgram>);
+
+#[derive(Debug)]
+struct RegisteredProgram {
+    owner: TypeId,
+    systems: ProgramData,
+}
+
 impl Programs {
     pub fn get(&self, label: impl ProgramLabel) -> Option<&ProgramData> {
-        self.0.get(&label.intern())
+        self.0.get(&label.name()).map(|program| &program.systems)
     }
     pub fn get_mut(&mut self, label: impl ProgramLabel) -> Option<&mut ProgramData> {
-        self.0.get_mut(&label.intern())
+        self.0
+            .get_mut(&label.name())
+            .map(|program| &mut program.systems)
     }
     pub fn contains(&self, label: impl ProgramLabel) -> bool {
-        self.0.contains_key(&label.intern())
+        self.0.contains_key(&label.name())
     }
-    pub fn entry(
-        &mut self,
-        label: impl ProgramLabel,
-    ) -> Entry<'_, InternedProgramLabel, ProgramData> {
-        self.0.entry(label.intern())
+    /// Returns a registered program's interned name.
+    pub fn get_by_name(&self, name: &str) -> Option<InternedProgramLabel> {
+        self.0.get_key_value(name).map(|(label, _)| label.intern())
+    }
+    /// Returns the registered program names in unspecified order.
+    pub fn names(&self) -> impl Iterator<Item = ProgramName> + '_ {
+        self.0.keys().copied()
+    }
+    fn register<T: ProgramLabel + 'static>(&mut self, program: T) -> &mut ProgramData {
+        let name = program.name();
+        let owner = TypeId::of::<T>();
+        match self.0.entry(name) {
+            Entry::Occupied(entry) => {
+                assert_eq!(
+                    entry.get().owner,
+                    owner,
+                    "program name {:?} is already registered to another program",
+                    name.name()
+                );
+                &mut entry.into_mut().systems
+            }
+            Entry::Vacant(entry) => {
+                &mut entry
+                    .insert(RegisteredProgram {
+                        owner,
+                        systems: ProgramData::default(),
+                    })
+                    .systems
+            }
+        }
     }
 }
 
@@ -50,35 +82,61 @@ pub type ProgramSystem = SystemId<In<Entity>, ()>;
 pub trait IntoProgramSystem<M>: IntoSystem<In<Entity>, (), M> + 'static {}
 impl<T, M> IntoProgramSystem<M> for T where T: IntoSystem<In<Entity>, (), M> + 'static {}
 
-define_label!(
-    /// Label for a program, analogous to [`ScheduleLabel`].
-    ProgramLabel,
-    PROGRAM_LABEL_INTERNER,
-    extra_methods: {
-        /// Name of the program, used to run it on the command line.
-        fn name(&self) -> ProgramName;
-    },
-    extra_methods_impl: {
-        /// Name of the program, used to run it on the command line.
-        fn name(&self) -> ProgramName {
-            ProgramName::new("PLACEHOLDER").unwrap()
+/// A program's runtime identity and command name.
+#[derive(Clone, Copy, Debug, Deref, Eq, Hash, PartialEq)]
+pub struct ProgramName(&'static str);
+impl ProgramName {
+    /// Constructs a name suitable for a single command token.
+    pub fn new(name: &'static str) -> Result<Self, &'static str> {
+        if name.is_empty() || name.chars().any(char::is_whitespace) {
+            Err("Program name must be nonempty and contain no whitespace.")
+        } else {
+            Ok(Self(name))
         }
     }
-);
+    pub fn name(&self) -> &'static str {
+        self.0
+    }
+}
+impl Borrow<str> for ProgramName {
+    fn borrow(&self) -> &str {
+        self.0
+    }
+}
 
-/// Shorthand for [`Interned<dyn ProgramLabel>`]
-pub type InternedProgramLabel = Interned<dyn ProgramLabel>;
+/// The runtime label is the interned program name, not a separate type identity.
+pub type InternedProgramLabel = Interned<str>;
 
-// TODO: Derive macro for ProgramLabel
+static PROGRAM_NAME_INTERNER: Interner<str> = Interner::new();
+
+/// Supplies a program name for typed application registration.
+pub trait ProgramLabel: Send + Sync + std::fmt::Debug + 'static {
+    fn name(&self) -> ProgramName;
+    fn intern(&self) -> InternedProgramLabel {
+        PROGRAM_NAME_INTERNER.intern(self.name().name())
+    }
+}
+impl ProgramLabel for ProgramName {
+    fn name(&self) -> ProgramName {
+        *self
+    }
+}
+impl ProgramLabel for InternedProgramLabel {
+    fn name(&self) -> ProgramName {
+        ProgramName::new(self.0).expect("interned program label must have a valid name")
+    }
+    fn intern(&self) -> InternedProgramLabel {
+        *self
+    }
+}
+
 #[macro_export]
 macro_rules! impl_program_label {
     ($t:ty, $name:literal) => {
-        impl ProgramLabel for $t {
-            fn name(&self) -> ProgramName {
-                ProgramName::new($name).unwrap()
-            }
-            fn dyn_clone(&self) -> Box<dyn ProgramLabel> {
-                Box::new(self.clone())
+        impl $crate::prelude::ProgramLabel for $t {
+            fn name(&self) -> $crate::prelude::ProgramName {
+                $crate::prelude::ProgramName::new($name)
+                    .expect("program name must be nonempty and contain no whitespace")
             }
         }
     };
@@ -117,23 +175,6 @@ impl Process {
     }
 }
 
-/// The name of a program. This type exists to ensure validity on construction.
-/// In particular, program names must not contain whitespace.
-#[derive(Debug, Deref)]
-pub struct ProgramName(&'static str);
-impl ProgramName {
-    pub fn new(name: &'static str) -> Result<Self, &'static str> {
-        if name.split_whitespace().count() > 1 {
-            Err("Program name must not contain whitespace.")
-        } else {
-            Ok(Self(name))
-        }
-    }
-    pub fn name(&self) -> &'static str {
-        self.0
-    }
-}
-
 /// Registration options for one program type.
 pub struct AppProgramOpts<'a, T: ProgramLabel + Default> {
     app: &'a mut App,
@@ -152,10 +193,7 @@ impl<T: ProgramLabel + Default> AppProgramOpts<'_, T> {
         let program = T::default();
         trace!("Registered program system for {program:?}");
         let mut programs = self.app.world_mut().resource_mut::<Programs>();
-        programs
-            .entry(program)
-            .or_default()
-            .insert(schedule.intern(), id);
+        programs.register(program).insert(schedule.intern(), id);
         trace!("Programs: {programs:#?}");
         self
     }
@@ -176,7 +214,7 @@ impl ProgramAppExt for App {
         let program = T::default();
         trace!("Registered program {program:?}");
         let mut programs = self.world_mut().resource_mut::<Programs>();
-        programs.entry(program).or_default();
+        programs.register(program);
         trace!("Programs: {programs:#?}");
         self
     }
