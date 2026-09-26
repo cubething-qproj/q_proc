@@ -7,12 +7,11 @@ repository = "https://github.com/cubething-qproj/q_proc"
 
 [dependencies]
 bevy = "0.19"
-bevy_dylib = { optional = true, version = "0.19.0" }
 tiny_bail = "0.7"
 thiserror = "2"
 
 [features]
-dylib = ["bevy/dynamic_linking", "dep:bevy_dylib"]
+dylib = ["bevy/dynamic_linking"]
 
 [dev-dependencies]
 q_test_harness = { git = "https://github.com/cubething-qproj/q_test_harness", version = "^0.1" }
@@ -51,3 +50,5 @@ inherits = "dev"
 
 [profile.android-dev]
 inherits = "dev"
+
+
