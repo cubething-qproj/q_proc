@@ -7,13 +7,12 @@
 use std::{any::TypeId, time::Duration};
 
 use bevy::{app::ScheduleRunnerPlugin, log::LogPlugin, platform::collections::HashMap, prelude::*};
-use q_proc::{impl_program_label, prelude::*};
+use q_proc::prelude::*;
 
-#[derive(Component, Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
+#[derive(Component, Clone, Copy, Debug, Default, Hash, PartialEq, Eq, ProgramLabel)]
+#[program_label("my-program")]
 #[require(HelloTimer)]
 struct MyProgram;
-
-impl_program_label!(MyProgram, "my-program");
 
 /// Per-invocation program state.
 #[derive(Component)]

@@ -125,6 +125,47 @@ pub type InternedProgramLabel = Interned<str>;
 static PROGRAM_NAME_INTERNER: Interner<str> = Interner::new();
 
 /// Supplies a program name for typed application registration.
+///
+/// Derive this trait with one explicit `#[program_label("name")]` attribute.
+/// Names must be nonempty and contain no whitespace. The derive validates the
+/// literal at compile time; runtime registration still enforces uniqueness.
+/// A registered marker also needs `Component`, `Default`, and `Debug`.
+///
+/// ```
+/// use q_proc::prelude::*;
+///
+/// #[derive(Component, Default, Debug, ProgramLabel)]
+/// #[program_label("sleep")]
+/// struct Sleep;
+///
+/// assert_eq!(Sleep.name().name(), "sleep");
+/// ```
+///
+/// A missing name is a compile error:
+///
+/// ```compile_fail
+/// use q_proc::prelude::*;
+/// #[derive(Debug, ProgramLabel)]
+/// struct MissingName;
+/// ```
+///
+/// Empty names are also rejected:
+///
+/// ```compile_fail
+/// use q_proc::prelude::*;
+/// #[derive(Debug, ProgramLabel)]
+/// #[program_label("")]
+/// struct EmptyName;
+/// ```
+///
+/// Whitespace is rejected before registration:
+///
+/// ```compile_fail
+/// use q_proc::prelude::*;
+/// #[derive(Debug, ProgramLabel)]
+/// #[program_label("two words")]
+/// struct InvalidName;
+/// ```
 pub trait ProgramLabel: Send + Sync + std::fmt::Debug + 'static {
     fn name(&self) -> ProgramName;
     fn intern(&self) -> InternedProgramLabel {
@@ -143,18 +184,6 @@ impl ProgramLabel for InternedProgramLabel {
     fn intern(&self) -> InternedProgramLabel {
         *self
     }
-}
-
-#[macro_export]
-macro_rules! impl_program_label {
-    ($t:ty, $name:literal) => {
-        impl $crate::prelude::ProgramLabel for $t {
-            fn name(&self) -> $crate::prelude::ProgramName {
-                $crate::prelude::ProgramName::new($name)
-                    .expect("program name must be nonempty and contain no whitespace")
-            }
-        }
-    };
 }
 
 /// A [`Process`] is one running instance of a registered [`ProgramLabel`].

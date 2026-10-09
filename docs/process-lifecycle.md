@@ -22,11 +22,10 @@ hold per-invocation state.
 ```rust
 use q_proc::prelude::*;
 
-#[derive(Component, Default, Debug)]
+#[derive(Component, Default, Debug, ProgramLabel)]
+#[program_label("countdown")]
 #[require(Ticks)]
 struct Countdown;
-
-q_proc::impl_program_label!(Countdown, "countdown");
 
 #[derive(Component, Default)]
 struct Ticks(u32);

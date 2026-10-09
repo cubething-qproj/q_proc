@@ -7,6 +7,7 @@ repository = "https://github.com/cubething-qproj/q_proc"
 
 [dependencies]
 bevy = "0.19"
+q_proc_derive = { path = "derive", version = "0.1.0" }
 tiny_bail = "0.7"
 thiserror = "2"
 

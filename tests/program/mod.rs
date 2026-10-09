@@ -2,6 +2,7 @@ use bevy::platform::collections::HashMap;
 
 use crate::prelude::*;
 
+mod derive;
 mod exit;
 mod missing;
 mod name;
@@ -10,15 +11,13 @@ mod registration;
 mod routing;
 mod schedules;
 
-#[derive(Component, Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
+#[derive(Component, Clone, Copy, Debug, Default, Hash, PartialEq, Eq, ProgramLabel)]
+#[program_label("test-program")]
 struct TestProgram;
 
-q_proc::impl_program_label!(TestProgram, "test-program");
-
-#[derive(Component, Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
+#[derive(Component, Clone, Copy, Debug, Default, Hash, PartialEq, Eq, ProgramLabel)]
+#[program_label("other-program")]
 struct OtherProgram;
-
-q_proc::impl_program_label!(OtherProgram, "other-program");
 
 #[derive(Resource, Default)]
 struct Invocations(Vec<Entity>);
