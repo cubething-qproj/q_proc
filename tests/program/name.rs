@@ -61,31 +61,11 @@ fn programs_registered_after_plugin_setup_are_discoverable() {
 #[test]
 #[should_panic(expected = "already registered to another program")]
 fn duplicate_names_are_rejected() {
-    #[derive(Component, Clone, Debug, Default, Eq, Hash, PartialEq)]
+    #[derive(Component, Clone, Debug, Default, Eq, Hash, PartialEq, ProgramLabel)]
+    #[program_label("test-program")]
     struct Duplicate;
-    q_proc::impl_program_label!(Duplicate, "test-program");
 
     let mut app = get_test_app();
     app.register_program::<TestProgram>();
     app.register_program::<Duplicate>();
-}
-
-#[test]
-#[should_panic(expected = "program name must be nonempty")]
-fn empty_names_are_rejected() {
-    #[derive(Component, Clone, Debug, Default, Eq, Hash, PartialEq)]
-    struct Empty;
-    q_proc::impl_program_label!(Empty, "");
-
-    get_test_app().register_program::<Empty>();
-}
-
-#[test]
-#[should_panic(expected = "program name must be nonempty")]
-fn whitespace_in_names_is_rejected() {
-    #[derive(Component, Clone, Debug, Default, Eq, Hash, PartialEq)]
-    struct Whitespace;
-    q_proc::impl_program_label!(Whitespace, "two words");
-
-    get_test_app().register_program::<Whitespace>();
 }

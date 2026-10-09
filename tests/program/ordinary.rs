@@ -1,11 +1,10 @@
 use super::*;
 
 /// Counts frames, then exits once it has counted to `argv[0]`.
-#[derive(Component, Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
+#[derive(Component, Clone, Copy, Debug, Default, Hash, PartialEq, Eq, ProgramLabel)]
+#[program_label("countdown")]
 #[require(Ticks)]
 struct Countdown;
-
-q_proc::impl_program_label!(Countdown, "countdown");
 
 /// Per-invocation program state.
 #[derive(Component, Default)]
@@ -81,11 +80,10 @@ fn invocations_keep_independent_state() {
 }
 
 /// A program with state that does nothing.
-#[derive(Component, Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
+#[derive(Component, Clone, Copy, Debug, Default, Hash, PartialEq, Eq, ProgramLabel)]
+#[program_label("idle")]
 #[require(IdleState)]
 struct Idle;
-
-q_proc::impl_program_label!(Idle, "idle");
 
 #[derive(Component, Default)]
 struct IdleState;

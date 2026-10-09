@@ -12,10 +12,9 @@ mod input;
 mod lifecycle;
 mod routing;
 
-#[derive(Component, Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
+#[derive(Component, Clone, Copy, Debug, Default, Hash, PartialEq, Eq, ProgramLabel)]
+#[program_label("io-program")]
 struct IoProgram;
-
-q_proc::impl_program_label!(IoProgram, "io-program");
 
 #[derive(Component)]
 struct FirstEndpoint;
