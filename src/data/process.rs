@@ -158,7 +158,15 @@ macro_rules! impl_program_label {
 }
 
 /// A [`Process`] is one running instance of a registered [`ProgramLabel`].
-/// The process dies when this component is removed.
+///
+/// The entity is the process. Use [`ProcessExitExt::exit`] to complete it with a
+/// code, or despawn it to terminate without an explicit status. [`ProcessExited`]
+/// is triggered during removal, and cached descriptors route pending writes
+/// after despawn.
+///
+/// Removing this component also ends the invocation permanently: cleanup
+/// despawns the entity after routing, even if `Process` is reinserted. Replace
+/// the component directly to switch programs without ending the invocation.
 ///
 /// A process carries its program's marker component for as long as it runs.
 #[derive(Component, Clone, Debug)]
@@ -225,6 +233,67 @@ impl Process {
                 process.remove::<ProcessFdTable>();
             }
         });
+
+        let status = world
+            .get::<ExitStatus>(context.entity)
+            .copied()
+            .unwrap_or(ExitStatus::Terminated);
+        world.trigger(ProcessExited {
+            entity: context.entity,
+            status,
+        });
+    }
+}
+
+/// How a [`Process`] ended.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExitStatus {
+    /// The program completed with this code through [`ProcessExitExt::exit`].
+    Code(i32),
+    /// The process was removed or despawned without an explicit status.
+    Terminated,
+}
+
+/// Triggered on a process's entity when the process ends, before the entity is
+/// despawned. Owners observe it to learn the [`ExitStatus`].
+///
+/// Observers run synchronously inside the removal hook and can read the entity's
+/// components and relationships. Queued commands run after removal; on despawn
+/// the entity is already gone. Store the status on the owner, and use `try_*`
+/// commands when targeting the ended process. Its descriptor table is also
+/// removed before queued observer commands run.
+#[derive(EntityEvent, Clone, Copy, Debug)]
+pub struct ProcessExited {
+    /// The entity of the ended invocation.
+    pub entity: Entity,
+    /// The explicit status, or [`ExitStatus::Terminated`] if none was supplied.
+    pub status: ExitStatus,
+}
+
+/// Completes a process through deferred or immediate entity access.
+pub trait ProcessExitExt {
+    /// Sets the temporary exit status and despawns the process in one operation.
+    ///
+    /// Does nothing if the entity has no [`Process`]. With [`EntityCommands`],
+    /// the operation is deferred and also ignores an entity that disappeared
+    /// before command application. With [`EntityWorldMut`], it runs immediately.
+    /// The removal hook remains the sole source of [`ProcessExited`].
+    fn exit(self, code: i32);
+}
+
+impl ProcessExitExt for EntityWorldMut<'_> {
+    fn exit(mut self, code: i32) {
+        if !self.contains::<Process>() {
+            return;
+        }
+        self.insert(ExitStatus::Code(code));
+        self.despawn();
+    }
+}
+
+impl ProcessExitExt for EntityCommands<'_> {
+    fn exit(mut self, code: i32) {
+        self.queue_silenced(move |process: EntityWorldMut| process.exit(code));
     }
 }
 

@@ -72,13 +72,21 @@ fn program_labels_route_to_their_own_systems() {
     assert!(app.run().is_success());
 }
 
+#[derive(Resource, Default)]
+struct Exits(Vec<(Entity, ExitStatus)>);
+
 /// A process removed by another program stops running once the removal is
-/// applied, at the end of `RunPrograms`.
+/// applied, at the end of `RunPrograms`. It was terminated, not exited, and its
+/// entity is despawned.
 #[test]
 fn removed_process_stops_running() {
     let mut app = App::new();
     app.add_plugins(ProcessPlugin);
     app.init_resource::<RoutedInvocations>();
+    app.init_resource::<Exits>();
+    app.add_observer(|exited: On<ProcessExited>, mut exits: ResMut<Exits>| {
+        exits.0.push((exited.entity, exited.status));
+    });
     app.program::<TestProgram>()
         .add_systems(Update, remove_victim);
     app.program::<OtherProgram>()
@@ -108,7 +116,9 @@ fn removed_process_stops_running() {
         app.world().resource::<RoutedInvocations>().0,
         [("other", victim)]
     );
-    let victim = app.world().entity(victim);
-    assert!(!victim.contains::<Process>());
-    assert!(!victim.contains::<OtherProgram>());
+    assert_eq!(
+        app.world().resource::<Exits>().0,
+        [(victim, ExitStatus::Terminated)]
+    );
+    assert!(app.world().get_entity(victim).is_err());
 }

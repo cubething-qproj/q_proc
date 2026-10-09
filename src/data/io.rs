@@ -135,7 +135,9 @@ impl IoComponentCache {
 #[derive(Component, Default, Deref, DerefMut)]
 pub(crate) struct IoCapabilities(HashSet<TypeId>);
 
-/// Descriptor tables retained until final writes from removed processes are routed.
+/// Descriptor tables retained until the next routing pass, including those of
+/// already-despawned processes. Cleanup then discards them and despawns any
+/// entities left behind by removing `Process`.
 #[derive(Resource, Default, Deref, DerefMut)]
 pub(crate) struct ClosingProcessIo(HashMap<Entity, ProcessFdTable>);
 

@@ -27,7 +27,7 @@ fn run_countdown(
         ticks.0 += 1;
         if info.argv[0].parse() == Ok(ticks.0) {
             exits.0.push((process, ticks.0));
-            commands.entity(process).remove::<Process>();
+            commands.entity(process).exit(0);
         }
     }
 }

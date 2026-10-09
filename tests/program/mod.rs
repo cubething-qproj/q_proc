@@ -2,6 +2,7 @@ use bevy::platform::collections::HashMap;
 
 use crate::prelude::*;
 
+mod exit;
 mod missing;
 mod name;
 mod ordinary;
