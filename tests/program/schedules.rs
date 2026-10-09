@@ -3,23 +3,29 @@ use super::*;
 #[derive(Resource, Default)]
 struct ScheduleInvocations(Vec<&'static str>);
 
-fn record_pre_update(In(_process): In<Entity>, mut invocations: ResMut<ScheduleInvocations>) {
-    invocations.0.push("pre-update");
+fn record_pre_update(
+    processes: Query<(), With<TestProgram>>,
+    mut invocations: ResMut<ScheduleInvocations>,
+) {
+    invocations.0.extend(processes.iter().map(|_| "pre-update"));
 }
 
-fn record_update(In(_process): In<Entity>, mut invocations: ResMut<ScheduleInvocations>) {
-    invocations.0.push("update");
+fn record_update(
+    processes: Query<(), With<TestProgram>>,
+    mut invocations: ResMut<ScheduleInvocations>,
+) {
+    invocations.0.extend(processes.iter().map(|_| "update"));
 }
 
-/// Systems registered to different schedules are retained and dispatched in
-/// schedule order.
+/// A program's systems run in every schedule they were added to, in schedule
+/// order.
 #[test]
 fn program_runs_each_registered_schedule() {
     let mut app = get_test_app();
     app.init_resource::<ScheduleInvocations>();
     app.program::<TestProgram>()
-        .add_system(PreUpdate, record_pre_update)
-        .add_system(Update, record_update);
+        .add_systems(PreUpdate, record_pre_update)
+        .add_systems(Update, record_update);
 
     app.add_systems(Startup, |mut commands: Commands| {
         spawn_process(&mut commands, TestProgram);

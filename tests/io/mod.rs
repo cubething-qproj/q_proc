@@ -12,7 +12,7 @@ mod input;
 mod lifecycle;
 mod routing;
 
-#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
+#[derive(Component, Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
 struct IoProgram;
 
 q_proc::impl_program_label!(IoProgram, "io-program");

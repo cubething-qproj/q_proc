@@ -8,22 +8,20 @@ use super::*;
 struct ConsumedInput(HashMap<Entity, Vec<u8>>);
 
 fn consume_input(
-    In(process): In<Entity>,
-    mut buffers: Query<&mut ProcessInputBuffer<Vec<u8>>>,
+    mut buffers: Query<(Entity, &mut ProcessInputBuffer<Vec<u8>>), With<IoProgram>>,
     mut consumed: ResMut<ConsumedInput>,
 ) {
-    let mut buffer = buffers
-        .get_mut(process)
-        .expect("the dispatched process should have its input buffer");
-    consumed.0.insert(
-        process,
-        buffer
-            .remove(&FileDescriptor::STDIN)
-            .unwrap_or_default()
-            .into_iter()
-            .flat_map(|payload| payload.iter().copied().collect::<Vec<_>>())
-            .collect(),
-    );
+    for (process, mut buffer) in &mut buffers {
+        consumed.0.insert(
+            process,
+            buffer
+                .remove(&FileDescriptor::STDIN)
+                .unwrap_or_default()
+                .into_iter()
+                .flat_map(|payload| payload.iter().copied().collect::<Vec<_>>())
+                .collect(),
+        );
+    }
 }
 
 #[test]
@@ -33,7 +31,7 @@ fn input_is_demultiplexed_before_shared_program_invocations() {
     app.register_io_component::<FirstEndpoint>();
     app.init_resource::<ConsumedInput>();
     app.program::<IoProgram>()
-        .add_system(PreUpdate, consume_input);
+        .add_systems(PreUpdate, consume_input);
 
     let (_, endpoint) = first_endpoint(&mut app);
     let first = spawn_io_process(&mut app, &[(FileDescriptor::STDIN, endpoint)]);

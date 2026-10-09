@@ -9,12 +9,12 @@ mod registration;
 mod routing;
 mod schedules;
 
-#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
+#[derive(Component, Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
 struct TestProgram;
 
 q_proc::impl_program_label!(TestProgram, "test-program");
 
-#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
+#[derive(Component, Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
 struct OtherProgram;
 
 q_proc::impl_program_label!(OtherProgram, "other-program");
@@ -25,8 +25,11 @@ struct Invocations(Vec<Entity>);
 #[derive(Resource)]
 struct ExpectedProcess(Entity);
 
-fn record_invocation(In(process): In<Entity>, mut invocations: ResMut<Invocations>) {
-    invocations.0.push(process);
+fn record_invocation(
+    processes: Query<Entity, With<TestProgram>>,
+    mut invocations: ResMut<Invocations>,
+) {
+    invocations.0.extend(&processes);
 }
 
 fn spawn_process(commands: &mut Commands, program: impl ProgramLabel) -> Entity {
@@ -40,14 +43,13 @@ fn spawn_process(commands: &mut Commands, program: impl ProgramLabel) -> Entity 
         .id()
 }
 
-/// A program system registered for `Update` runs with the matching process
-/// entity as its input.
+/// A program system registered for `Update` runs for the matching process.
 #[test]
 fn update_system_runs_for_matching_process() {
     let mut app = get_test_app();
     app.init_resource::<Invocations>();
     app.program::<TestProgram>()
-        .add_system(Update, record_invocation);
+        .add_systems(Update, record_invocation);
 
     app.add_systems(Startup, |mut commands: Commands| {
         let process = spawn_process(&mut commands, TestProgram);
@@ -76,7 +78,7 @@ fn update_system_runs_for_matching_process() {
     assert!(app.run().is_success());
 }
 
-/// Every process carrying a registered program label is dispatched separately.
+/// A program system runs once for every process of its program.
 #[test]
 fn update_system_runs_for_each_matching_process() {
     #[derive(Resource)]
@@ -85,7 +87,7 @@ fn update_system_runs_for_each_matching_process() {
     let mut app = get_test_app();
     app.init_resource::<Invocations>();
     app.program::<TestProgram>()
-        .add_system(Update, record_invocation);
+        .add_systems(Update, record_invocation);
 
     app.add_systems(Startup, |mut commands: Commands| {
         let processes = [

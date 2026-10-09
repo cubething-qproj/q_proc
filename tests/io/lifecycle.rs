@@ -12,12 +12,14 @@ fn remove_process(mut commands: Commands, process: Res<ProcessToRemove>) {
 }
 
 fn write_then_exit(
-    In(process): In<Entity>,
+    processes: Query<Entity, With<IoProgram>>,
     mut commands: Commands,
     mut writes: MessageWriter<ByteWrite>,
 ) {
-    writes.write(ByteWrite::stdout(process, b"final".to_vec()));
-    commands.entity(process).remove::<Process>();
+    for process in &processes {
+        writes.write(ByteWrite::stdout(process, b"final".to_vec()));
+        commands.entity(process).remove::<Process>();
+    }
 }
 
 #[test]
@@ -26,7 +28,7 @@ fn final_write_routes_before_process_io_cleanup() {
     app.add_plugins(ProcessPlugin);
     app.register_io_component::<FirstEndpoint>();
     app.program::<IoProgram>()
-        .add_system(Update, write_then_exit);
+        .add_systems(Update, write_then_exit);
 
     let (_, endpoint) = first_endpoint(&mut app);
     let process = spawn_io_process(&mut app, &[(FileDescriptor::STDOUT, endpoint)]);

@@ -1,17 +1,29 @@
 //! Minimal endpoint-neutral program example.
 //!
-//! Spawns a process with stdout connected to an example-local endpoint and
-//! writes bytes once per second through [`ProcessWriteMsg`].
+//! Spawns a process with stdout connected to an example-local endpoint. The
+//! program writes bytes once per second through [`ProcessWriteMsg`], keeping
+//! its timer in a per-invocation state component.
 
 use std::{any::TypeId, time::Duration};
 
 use bevy::{app::ScheduleRunnerPlugin, log::LogPlugin, platform::collections::HashMap, prelude::*};
 use q_proc::{impl_program_label, prelude::*};
 
-#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
+#[derive(Component, Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
+#[require(HelloTimer)]
 struct MyProgram;
 
 impl_program_label!(MyProgram, "my-program");
+
+/// Per-invocation program state.
+#[derive(Component)]
+struct HelloTimer(Timer);
+
+impl Default for HelloTimer {
+    fn default() -> Self {
+        Self(Timer::from_seconds(1.0, TimerMode::Repeating))
+    }
+}
 
 #[derive(Component)]
 struct LogEndpoint;
@@ -29,7 +41,7 @@ fn main() {
         ProcessPlugin,
     ));
     app.register_io_component::<LogEndpoint>();
-    app.program::<MyProgram>().add_system(Update, write_hello);
+    app.program::<MyProgram>().add_systems(Update, write_hello);
     app.add_systems(
         Update,
         log_endpoint_writes.after(ProcessSystems::RouteWrites),
@@ -61,18 +73,18 @@ fn main() {
 }
 
 fn write_hello(
-    In(process): In<Entity>,
+    mut processes: Query<(Entity, &mut HelloTimer), With<MyProgram>>,
     mut writes: MessageWriter<ProcessWriteMsg<String>>,
-    mut timer: Local<Option<Timer>>,
     time: Res<Time>,
 ) {
-    let timer = timer.get_or_insert_with(|| Timer::from_seconds(1.0, TimerMode::Repeating));
-    timer.tick(time.delta());
-    if timer.just_finished() {
-        writes.write(ProcessWriteMsg::<String>::stdout(
-            process,
-            format!("Hello from process {process}!"),
-        ));
+    for (process, mut timer) in &mut processes {
+        timer.0.tick(time.delta());
+        if timer.0.just_finished() {
+            writes.write(ProcessWriteMsg::<String>::stdout(
+                process,
+                format!("Hello from process {process}!"),
+            ));
+        }
     }
 }
 

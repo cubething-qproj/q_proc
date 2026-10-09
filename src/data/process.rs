@@ -5,7 +5,7 @@ use bevy::{
     ecs::{
         intern::{Interned, Interner},
         lifecycle::HookContext,
-        schedule::{InternedScheduleLabel, ScheduleLabel},
+        schedule::ScheduleLabel,
         system::{ScheduleSystem, SystemId},
         world::DeferredWorld,
     },
@@ -21,8 +21,7 @@ pub struct Programs(HashMap<ProgramName, RegisteredProgram>);
 #[derive(Debug)]
 struct RegisteredProgram {
     owner: TypeId,
-    systems: ProgramData,
-    marker: Option<ProgramMarker>,
+    marker: ProgramMarker,
 }
 
 /// Inserts and removes the marker component that selects a program's
@@ -62,14 +61,6 @@ impl ProgramMarker {
 }
 
 impl Programs {
-    pub fn get(&self, label: impl ProgramLabel) -> Option<&ProgramData> {
-        self.0.get(&label.name()).map(|program| &program.systems)
-    }
-    pub fn get_mut(&mut self, label: impl ProgramLabel) -> Option<&mut ProgramData> {
-        self.0
-            .get_mut(&label.name())
-            .map(|program| &mut program.systems)
-    }
     pub fn contains(&self, label: impl ProgramLabel) -> bool {
         self.0.contains_key(&label.name())
     }
@@ -82,14 +73,9 @@ impl Programs {
         self.0.keys().copied()
     }
     fn marker(&self, label: InternedProgramLabel) -> Option<ProgramMarker> {
-        self.0.get(&label.name())?.marker
+        Some(self.0.get(&label.name())?.marker)
     }
-    fn set_marker(&mut self, name: ProgramName, marker: ProgramMarker) {
-        if let Some(program) = self.0.get_mut(&name) {
-            program.marker = Some(marker);
-        }
-    }
-    fn register<T: ProgramLabel + 'static>(&mut self, program: T) -> &mut ProgramData {
+    fn register<T: ProgramLabel + Component + Default>(&mut self, program: T) {
         let name = program.name();
         let owner = TypeId::of::<T>();
         match self.0.entry(name) {
@@ -100,33 +86,16 @@ impl Programs {
                     "program name {:?} is already registered to another program",
                     name.name()
                 );
-                &mut entry.into_mut().systems
             }
             Entry::Vacant(entry) => {
-                &mut entry
-                    .insert(RegisteredProgram {
-                        owner,
-                        systems: ProgramData::default(),
-                        marker: None,
-                    })
-                    .systems
+                entry.insert(RegisteredProgram {
+                    owner,
+                    marker: ProgramMarker::of::<T>(),
+                });
             }
         }
     }
 }
-
-/// Data associated with a [`ProgramLabel`]. Specifically, [`SystemId`]s mapped to [`ScheduleLabel`]s.
-/// Note that this currently only accepts **one** system per label.
-// TODO: Store schedules rather than individual systems so a program phase can
-// contain multiple ordered systems.
-pub type ProgramData = HashMap<InternedScheduleLabel, SystemId<In<Entity>, ()>>;
-
-/// Type alias for a [`System`] associated with a [`ProgramLabel`].
-/// The input is an [`Entity`] pointer to the live [`Process`].
-pub type ProgramSystem = SystemId<In<Entity>, ()>;
-
-pub trait IntoProgramSystem<M>: IntoSystem<In<Entity>, (), M> + 'static {}
-impl<T, M> IntoProgramSystem<M> for T where T: IntoSystem<In<Entity>, (), M> + 'static {}
 
 /// A program's runtime identity and command name.
 #[derive(Clone, Copy, Debug, Deref, Eq, Hash, PartialEq)]
@@ -191,8 +160,7 @@ macro_rules! impl_program_label {
 /// A [`Process`] is one running instance of a registered [`ProgramLabel`].
 /// The process dies when this component is removed.
 ///
-/// A process of a program registered with [`AppProgramOpts::add_systems`]
-/// carries that program's marker component for as long as it runs.
+/// A process carries its program's marker component for as long as it runs.
 #[derive(Component, Clone, Debug)]
 #[component(
     immutable,
@@ -224,7 +192,7 @@ impl Process {
         Self::change_marker(world, context.entity, MarkerChange::Remove);
     }
 
-    /// Queues `change` to `entity`'s program marker, if its program has one.
+    /// Queues `change` to `entity`'s program marker.
     fn change_marker(mut world: DeferredWorld, entity: Entity, change: MarkerChange) {
         let Some(prog) = world.get::<Process>(entity).map(|process| process.prog) else {
             return;
@@ -233,6 +201,9 @@ impl Process {
             .get_resource::<Programs>()
             .and_then(|programs| programs.marker(prog))
         else {
+            if matches!(change, MarkerChange::Insert) {
+                warn!("Process {entity} runs unregistered program {:?}", prog.name().name());
+            }
             return;
         };
         world.commands().queue(move |world: &mut World| {
@@ -258,59 +229,36 @@ impl Process {
 }
 
 /// Registration options for one program type.
-pub struct AppProgramOpts<'a, T: ProgramLabel + Default> {
+pub struct AppProgramOpts<'a, T: ProgramLabel + Component + Default> {
     app: &'a mut App,
     marker: PhantomData<T>,
 }
 
-impl<T: ProgramLabel + Default> AppProgramOpts<'_, T> {
-    /// Registers one system in a host schedule for this program.
-    pub fn add_system<M, S: ScheduleLabel + Clone>(
-        &mut self,
-        schedule: S,
-        system: impl IntoProgramSystem<M>,
-    ) -> &mut Self {
-        crate::plugins::add_process_schedule(self.app, schedule.clone());
-        let id = self.app.register_system(system);
-        let program = T::default();
-        trace!("Registered program system for {program:?}");
-        let mut programs = self.app.world_mut().resource_mut::<Programs>();
-        programs.register(program).insert(schedule.intern(), id);
-        trace!("Programs: {programs:#?}");
-        self
-    }
-}
-
-impl<T: ProgramLabel + Default + Component> AppProgramOpts<'_, T> {
-    /// Adds ordinary systems for this program to
-    /// [`ProcessSystems::RunPrograms`] in `Update`.
+impl<T: ProgramLabel + Component + Default> AppProgramOpts<'_, T> {
+    /// Adds ordinary systems for this program to `schedule`'s
+    /// [`ProcessSystems::RunPrograms`] set, installing process I/O routing in
+    /// `schedule` if needed.
     ///
     /// Each running invocation carries a `T` marker, so systems select their
     /// invocations with `With<T>`. Per-invocation state belongs in components
     /// that `T` requires.
     ///
     /// Requirements:
-    /// - Call this before spawning the program's processes. The marker is
+    /// - Register the program before spawning its processes. The marker is
     ///   inserted when a [`Process`] is inserted, so earlier processes never
     ///   receive it.
     /// - When the process is removed, replaced, or despawned, `T` is removed
     ///   *with its required components*. Require only program-owned state:
     ///   requiring a shared component, such as `Name`, removes it from the
     ///   entity too.
-    /// - This is independent of [`Self::add_system`]: a program registered
-    ///   with both runs through both.
     pub fn add_systems<M>(
         &mut self,
+        schedule: impl ScheduleLabel + Clone,
         systems: impl IntoScheduleConfigs<ScheduleSystem, M>,
     ) -> &mut Self {
-        let program = T::default();
-        let name = program.name();
-        let mut programs = self.app.world_mut().resource_mut::<Programs>();
-        programs.register(program);
-        programs.set_marker(name, ProgramMarker::of::<T>());
-        crate::plugins::add_process_schedule(self.app, Update);
+        crate::plugins::add_process_schedule(self.app, schedule.clone());
         self.app
-            .add_systems(Update, systems.in_set(ProcessSystems::RunPrograms));
+            .add_systems(schedule, systems.in_set(ProcessSystems::RunPrograms));
         self
     }
 }
@@ -318,14 +266,14 @@ impl<T: ProgramLabel + Default + Component> AppProgramOpts<'_, T> {
 /// Adds and configures program types on an [`App`].
 pub trait ProgramAppExt {
     /// Registers `T` without changing systems already configured for it.
-    fn register_program<T: ProgramLabel + Default>(&mut self) -> &mut Self;
+    fn register_program<T: ProgramLabel + Component + Default>(&mut self) -> &mut Self;
 
-    /// Returns the system-registration options for `T`.
-    fn program<T: ProgramLabel + Default>(&mut self) -> AppProgramOpts<'_, T>;
+    /// Registers `T` and returns its system-registration options.
+    fn program<T: ProgramLabel + Component + Default>(&mut self) -> AppProgramOpts<'_, T>;
 }
 
 impl ProgramAppExt for App {
-    fn register_program<T: ProgramLabel + Default>(&mut self) -> &mut Self {
+    fn register_program<T: ProgramLabel + Component + Default>(&mut self) -> &mut Self {
         self.world_mut().init_resource::<Programs>();
         let program = T::default();
         trace!("Registered program {program:?}");
@@ -335,7 +283,7 @@ impl ProgramAppExt for App {
         self
     }
 
-    fn program<T: ProgramLabel + Default>(&mut self) -> AppProgramOpts<'_, T> {
+    fn program<T: ProgramLabel + Component + Default>(&mut self) -> AppProgramOpts<'_, T> {
         self.register_program::<T>();
         AppProgramOpts {
             app: self,

@@ -38,7 +38,7 @@ fn run_countdown(
 fn invocations_keep_independent_state() {
     let mut app = get_test_app();
     app.init_resource::<Exits>();
-    app.program::<Countdown>().add_systems(run_countdown);
+    app.program::<Countdown>().add_systems(Update, run_countdown);
 
     app.add_systems(Startup, |mut commands: Commands| {
         let mut spawn = |count: u32| {
@@ -107,8 +107,8 @@ fn replacing_a_process_swaps_its_program() {
 
     let mut app = get_test_app();
     app.init_resource::<Exits>();
-    app.program::<Countdown>().add_systems(run_countdown);
-    app.program::<Idle>().add_systems(|| {});
+    app.program::<Countdown>().add_systems(Update, run_countdown);
+    app.program::<Idle>().add_systems(Update, || {});
 
     app.add_systems(Startup, |mut commands: Commands| {
         let entity = commands.spawn(process(Countdown, &["1000"])).id();
