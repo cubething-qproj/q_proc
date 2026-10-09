@@ -4,6 +4,7 @@ use crate::prelude::*;
 
 mod missing;
 mod name;
+mod ordinary;
 mod registration;
 mod routing;
 mod schedules;

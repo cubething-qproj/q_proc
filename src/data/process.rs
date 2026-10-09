@@ -6,7 +6,7 @@ use bevy::{
         intern::{Interned, Interner},
         lifecycle::HookContext,
         schedule::{InternedScheduleLabel, ScheduleLabel},
-        system::SystemId,
+        system::{ScheduleSystem, SystemId},
         world::DeferredWorld,
     },
     platform::collections::{HashMap, hash_map::Entry},
@@ -22,6 +22,43 @@ pub struct Programs(HashMap<ProgramName, RegisteredProgram>);
 struct RegisteredProgram {
     owner: TypeId,
     systems: ProgramData,
+    marker: Option<ProgramMarker>,
+}
+
+/// Inserts and removes the marker component that selects a program's
+/// invocations for its ordinary systems.
+#[derive(Clone, Copy, Debug)]
+struct ProgramMarker {
+    insert: fn(&mut EntityWorldMut),
+    remove: fn(&mut EntityWorldMut),
+}
+
+/// Which half of a [`ProgramMarker`] a [`Process`] hook applies.
+#[derive(Clone, Copy, Debug)]
+enum MarkerChange {
+    Insert,
+    Remove,
+}
+
+impl ProgramMarker {
+    fn apply(self, change: MarkerChange, entity: &mut EntityWorldMut) {
+        match change {
+            MarkerChange::Insert => (self.insert)(entity),
+            MarkerChange::Remove => (self.remove)(entity),
+        }
+    }
+
+    fn of<T: Component + Default>() -> Self {
+        Self {
+            insert: |entity| {
+                entity.insert(T::default());
+            },
+            // Program state is the marker's required components.
+            remove: |entity| {
+                entity.remove_with_requires::<T>();
+            },
+        }
+    }
 }
 
 impl Programs {
@@ -44,6 +81,14 @@ impl Programs {
     pub fn names(&self) -> impl Iterator<Item = ProgramName> + '_ {
         self.0.keys().copied()
     }
+    fn marker(&self, label: InternedProgramLabel) -> Option<ProgramMarker> {
+        self.0.get(&label.name())?.marker
+    }
+    fn set_marker(&mut self, name: ProgramName, marker: ProgramMarker) {
+        if let Some(program) = self.0.get_mut(&name) {
+            program.marker = Some(marker);
+        }
+    }
     fn register<T: ProgramLabel + 'static>(&mut self, program: T) -> &mut ProgramData {
         let name = program.name();
         let owner = TypeId::of::<T>();
@@ -62,6 +107,7 @@ impl Programs {
                     .insert(RegisteredProgram {
                         owner,
                         systems: ProgramData::default(),
+                        marker: None,
                     })
                     .systems
             }
@@ -144,8 +190,16 @@ macro_rules! impl_program_label {
 
 /// A [`Process`] is one running instance of a registered [`ProgramLabel`].
 /// The process dies when this component is removed.
+///
+/// A process of a program registered with [`AppProgramOpts::add_systems`]
+/// carries that program's marker component for as long as it runs.
 #[derive(Component, Clone, Debug)]
-#[component(immutable, on_remove = Process::on_remove)]
+#[component(
+    immutable,
+    on_insert = Process::on_insert,
+    on_discard = Process::on_discard,
+    on_remove = Process::on_remove
+)]
 #[require(ProcessFdTable)]
 pub struct Process {
     /// The [`ProgramLabel`] associated with this [`Process`].
@@ -160,6 +214,34 @@ pub struct Process {
 }
 
 impl Process {
+    fn on_insert(world: DeferredWorld, context: HookContext) {
+        Self::change_marker(world, context.entity, MarkerChange::Insert);
+    }
+
+    /// Runs before every removal, replacement, and despawn, so a replaced
+    /// process's old marker is removed before the new one is inserted.
+    fn on_discard(world: DeferredWorld, context: HookContext) {
+        Self::change_marker(world, context.entity, MarkerChange::Remove);
+    }
+
+    /// Queues `change` to `entity`'s program marker, if its program has one.
+    fn change_marker(mut world: DeferredWorld, entity: Entity, change: MarkerChange) {
+        let Some(prog) = world.get::<Process>(entity).map(|process| process.prog) else {
+            return;
+        };
+        let Some(marker) = world
+            .get_resource::<Programs>()
+            .and_then(|programs| programs.marker(prog))
+        else {
+            return;
+        };
+        world.commands().queue(move |world: &mut World| {
+            if let Ok(mut entity) = world.get_entity_mut(entity) {
+                marker.apply(change, &mut entity);
+            }
+        });
+    }
+
     fn on_remove(mut world: DeferredWorld, context: HookContext) {
         if let Some(descriptors) = world.get::<ProcessFdTable>(context.entity).cloned()
             && let Some(mut closing) = world.get_resource_mut::<ClosingProcessIo>()
@@ -195,6 +277,40 @@ impl<T: ProgramLabel + Default> AppProgramOpts<'_, T> {
         let mut programs = self.app.world_mut().resource_mut::<Programs>();
         programs.register(program).insert(schedule.intern(), id);
         trace!("Programs: {programs:#?}");
+        self
+    }
+}
+
+impl<T: ProgramLabel + Default + Component> AppProgramOpts<'_, T> {
+    /// Adds ordinary systems for this program to
+    /// [`ProcessSystems::RunPrograms`] in `Update`.
+    ///
+    /// Each running invocation carries a `T` marker, so systems select their
+    /// invocations with `With<T>`. Per-invocation state belongs in components
+    /// that `T` requires.
+    ///
+    /// Requirements:
+    /// - Call this before spawning the program's processes. The marker is
+    ///   inserted when a [`Process`] is inserted, so earlier processes never
+    ///   receive it.
+    /// - When the process is removed, replaced, or despawned, `T` is removed
+    ///   *with its required components*. Require only program-owned state:
+    ///   requiring a shared component, such as `Name`, removes it from the
+    ///   entity too.
+    /// - This is independent of [`Self::add_system`]: a program registered
+    ///   with both runs through both.
+    pub fn add_systems<M>(
+        &mut self,
+        systems: impl IntoScheduleConfigs<ScheduleSystem, M>,
+    ) -> &mut Self {
+        let program = T::default();
+        let name = program.name();
+        let mut programs = self.app.world_mut().resource_mut::<Programs>();
+        programs.register(program);
+        programs.set_marker(name, ProgramMarker::of::<T>());
+        crate::plugins::add_process_schedule(self.app, Update);
+        self.app
+            .add_systems(Update, systems.in_set(ProcessSystems::RunPrograms));
         self
     }
 }
