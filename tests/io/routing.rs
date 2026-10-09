@@ -9,23 +9,27 @@ struct Emission(&'static [u8]);
 struct CustomProgramSchedule;
 
 fn emit_configured_write(
-    In(process): In<Entity>,
+    processes: Query<Entity, With<IoProgram>>,
     emission: Res<Emission>,
     mut writes: MessageWriter<ProcessWriteMsg<Vec<u8>>>,
 ) {
-    writes.write(ProcessWriteMsg::<Vec<u8>>::stdout(
-        process,
-        emission.0.to_vec(),
-    ));
+    for process in &processes {
+        writes.write(ProcessWriteMsg::<Vec<u8>>::stdout(
+            process,
+            emission.0.to_vec(),
+        ));
+    }
 }
 
 fn emit_ordered_writes(
-    In(process): In<Entity>,
+    processes: Query<Entity, With<IoProgram>>,
     mut writes: MessageWriter<ProcessWriteMsg<Vec<u8>>>,
 ) {
-    writes.write(ProcessWriteMsg::<Vec<u8>>::stdout(process, b"a".to_vec()));
-    writes.write(ProcessWriteMsg::<Vec<u8>>::stderr(process, b"b".to_vec()));
-    writes.write(ProcessWriteMsg::<Vec<u8>>::stdout(process, b"c".to_vec()));
+    for process in &processes {
+        writes.write(ProcessWriteMsg::<Vec<u8>>::stdout(process, b"a".to_vec()));
+        writes.write(ProcessWriteMsg::<Vec<u8>>::stderr(process, b"b".to_vec()));
+        writes.write(ProcessWriteMsg::<Vec<u8>>::stdout(process, b"c".to_vec()));
+    }
 }
 
 fn drain_routed_writes(app: &mut App) -> Vec<EndpointWriteMsg<Vec<u8>>> {
@@ -41,7 +45,7 @@ fn program_writes_route_in_cross_descriptor_order() {
     app.add_plugins(ProcessPlugin);
     app.register_io_component::<FirstEndpoint>();
     app.program::<IoProgram>()
-        .add_system(Update, emit_ordered_writes);
+        .add_systems(Update, emit_ordered_writes);
 
     let (_, endpoint) = first_endpoint(&mut app);
     let process = spawn_io_process(
@@ -79,12 +83,12 @@ fn routing_contract_is_installed_in_every_program_schedule() {
     app.insert_resource(Emission(b"initial"));
 
     app.program::<IoProgram>()
-        .add_system(PreUpdate, emit_configured_write)
-        .add_system(Update, emit_configured_write)
-        .add_system(PostUpdate, emit_configured_write)
-        .add_system(FixedPreUpdate, emit_configured_write)
-        .add_system(FixedUpdate, emit_configured_write)
-        .add_system(FixedPostUpdate, emit_configured_write);
+        .add_systems(PreUpdate, emit_configured_write)
+        .add_systems(Update, emit_configured_write)
+        .add_systems(PostUpdate, emit_configured_write)
+        .add_systems(FixedPreUpdate, emit_configured_write)
+        .add_systems(FixedUpdate, emit_configured_write)
+        .add_systems(FixedPostUpdate, emit_configured_write);
 
     let (_, endpoint) = first_endpoint(&mut app);
     let process = spawn_io_process(&mut app, &[(FileDescriptor::STDOUT, endpoint)]);
@@ -117,7 +121,7 @@ fn program_schedule_registration_is_lazy_and_supports_custom_schedules() {
     app.register_io_component::<FirstEndpoint>();
     app.insert_resource(Emission(b"custom"));
     app.program::<IoProgram>()
-        .add_system(CustomProgramSchedule, emit_configured_write);
+        .add_systems(CustomProgramSchedule, emit_configured_write);
 
     let (_, endpoint) = first_endpoint(&mut app);
     let process = spawn_io_process(&mut app, &[(FileDescriptor::STDOUT, endpoint)]);

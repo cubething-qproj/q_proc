@@ -3,6 +3,9 @@
 
 Process abstraction for bevy.
 
+See [Process lifecycle](docs/process-lifecycle.md) for ordinary program systems,
+per-invocation state, exit notifications, and final-output cleanup.
+
 ## License
 
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE.txt) or

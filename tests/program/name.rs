@@ -61,7 +61,7 @@ fn programs_registered_after_plugin_setup_are_discoverable() {
 #[test]
 #[should_panic(expected = "already registered to another program")]
 fn duplicate_names_are_rejected() {
-    #[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
+    #[derive(Component, Clone, Debug, Default, Eq, Hash, PartialEq)]
     struct Duplicate;
     q_proc::impl_program_label!(Duplicate, "test-program");
 
@@ -73,7 +73,7 @@ fn duplicate_names_are_rejected() {
 #[test]
 #[should_panic(expected = "program name must be nonempty")]
 fn empty_names_are_rejected() {
-    #[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
+    #[derive(Component, Clone, Debug, Default, Eq, Hash, PartialEq)]
     struct Empty;
     q_proc::impl_program_label!(Empty, "");
 
@@ -83,7 +83,7 @@ fn empty_names_are_rejected() {
 #[test]
 #[should_panic(expected = "program name must be nonempty")]
 fn whitespace_in_names_is_rejected() {
-    #[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
+    #[derive(Component, Clone, Debug, Default, Eq, Hash, PartialEq)]
     struct Whitespace;
     q_proc::impl_program_label!(Whitespace, "two words");
 

@@ -49,7 +49,6 @@ pub(crate) fn route_writes<T: IoMessage>(
     mut messages: ResMut<Messages<ProcessWriteMsg<T>>>,
     descriptors: Query<&ProcessFdTable>,
     closing: Res<ClosingProcessIo>,
-    entities: Query<()>,
     endpoints: Query<&IoCapabilities>,
     components: Res<IoComponentCache>,
     tees: Query<&TeeEndpoint<T>>,
@@ -61,12 +60,7 @@ pub(crate) fn route_writes<T: IoMessage>(
         let Some(endpoint) = descriptors
             .get(message.process)
             .ok()
-            .or_else(|| {
-                entities
-                    .contains(message.process)
-                    .then(|| closing.get(&message.process))
-                    .flatten()
-            })
+            .or_else(|| closing.get(&message.process))
             .and_then(|descriptors| descriptors.get(message.fd))
         else {
             warn!(
@@ -170,6 +164,9 @@ fn route_endpoint<T: IoMessage>(
     }
 }
 
-pub(crate) fn cleanup_process_io(mut closing: ResMut<ClosingProcessIo>) {
-    closing.clear();
+/// Despawns processes that ended, now that their final writes are routed.
+pub(crate) fn cleanup_process_io(mut closing: ResMut<ClosingProcessIo>, mut commands: Commands) {
+    for (process, _) in closing.drain() {
+        commands.entity(process).try_despawn();
+    }
 }

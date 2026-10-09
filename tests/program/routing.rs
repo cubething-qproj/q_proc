@@ -9,35 +9,35 @@ struct ExpectedRoutes {
     other: Entity,
 }
 
-fn record_test(In(process): In<Entity>, mut invocations: ResMut<RoutedInvocations>) {
-    invocations.0.push(("test", process));
+fn record_test(
+    processes: Query<Entity, With<TestProgram>>,
+    mut invocations: ResMut<RoutedInvocations>,
+) {
+    invocations.0.extend(processes.iter().map(|process| ("test", process)));
 }
 
-fn record_other(In(process): In<Entity>, mut invocations: ResMut<RoutedInvocations>) {
-    invocations.0.push(("other", process));
+fn record_other(
+    processes: Query<Entity, With<OtherProgram>>,
+    mut invocations: ResMut<RoutedInvocations>,
+) {
+    invocations.0.extend(processes.iter().map(|process| ("other", process)));
 }
 
 #[derive(Resource)]
 struct Victim(Entity);
 
-fn remove_victim(
-    In(process): In<Entity>,
-    victim: Res<Victim>,
-    mut commands: Commands,
-    mut invocations: ResMut<RoutedInvocations>,
-) {
-    invocations.0.push(("test", process));
+fn remove_victim(victim: Res<Victim>, mut commands: Commands) {
     commands.entity(victim.0).remove::<Process>();
 }
 
-/// Processes dispatch only through the system registered for their own label.
+/// Each program's systems run only for that program's processes.
 #[test]
 fn program_labels_route_to_their_own_systems() {
     let mut app = get_test_app();
     app.init_resource::<RoutedInvocations>();
-    app.program::<TestProgram>().add_system(Update, record_test);
+    app.program::<TestProgram>().add_systems(Update, record_test);
     app.program::<OtherProgram>()
-        .add_system(Update, record_other);
+        .add_systems(Update, record_other);
 
     app.add_systems(Startup, |mut commands: Commands| {
         let test = spawn_process(&mut commands, TestProgram);
@@ -72,25 +72,32 @@ fn program_labels_route_to_their_own_systems() {
     assert!(app.run().is_success());
 }
 
+#[derive(Resource, Default)]
+struct Exits(Vec<(Entity, ExitStatus)>);
+
+/// A process removed by another program stops running once the removal is
+/// applied, at the end of `RunPrograms`. It was terminated, not exited, and its
+/// entity is despawned.
 #[test]
-fn queued_invocation_skips_a_process_removed_by_an_earlier_invocation() {
+fn removed_process_stops_running() {
     let mut app = App::new();
     app.add_plugins(ProcessPlugin);
     app.init_resource::<RoutedInvocations>();
+    app.init_resource::<Exits>();
+    app.add_observer(|exited: On<ProcessExited>, mut exits: ResMut<Exits>| {
+        exits.0.push((exited.entity, exited.status));
+    });
     app.program::<TestProgram>()
-        .add_system(Update, remove_victim);
+        .add_systems(Update, remove_victim);
     app.program::<OtherProgram>()
-        .add_system(Update, record_other);
+        .add_systems(Update, record_other);
 
-    let killer = app
-        .world_mut()
-        .spawn(Process {
-            prog: TestProgram.intern(),
-            signal_overrides: HashMap::new(),
-            argv: Vec::new(),
-            environ: HashMap::new(),
-        })
-        .id();
+    app.world_mut().spawn(Process {
+        prog: TestProgram.intern(),
+        signal_overrides: HashMap::new(),
+        argv: Vec::new(),
+        environ: HashMap::new(),
+    });
     let victim = app
         .world_mut()
         .spawn(Process {
@@ -103,10 +110,15 @@ fn queued_invocation_skips_a_process_removed_by_an_earlier_invocation() {
     app.insert_resource(Victim(victim));
 
     app.world_mut().run_schedule(Update);
+    app.world_mut().run_schedule(Update);
 
     assert_eq!(
         app.world().resource::<RoutedInvocations>().0,
-        [("test", killer)]
+        [("other", victim)]
     );
-    assert!(!app.world().entity(victim).contains::<Process>());
+    assert_eq!(
+        app.world().resource::<Exits>().0,
+        [(victim, ExitStatus::Terminated)]
+    );
+    assert!(app.world().get_entity(victim).is_err());
 }

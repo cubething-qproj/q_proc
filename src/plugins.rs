@@ -8,14 +8,14 @@ use bevy::{
 };
 
 use crate::prelude::*;
-use crate::systems::{io::*, prog::*};
+use crate::systems::io::*;
 
 /// Ordered slots for process execution and I/O systems.
 #[derive(SystemSet, Debug, Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ProcessSystems {
     /// Demux endpoint input into process-local buffers.
     QueueInput,
-    /// Dispatch registered program systems.
+    /// Ordinary program systems, added with [`AppProgramOpts::add_systems`].
     RunPrograms,
     /// Resolve process writes through descriptor tables.
     RouteWrites,
@@ -132,12 +132,6 @@ pub(crate) fn add_process_schedule<S: ScheduleLabel + Clone>(app: &mut App, sche
     app.add_systems(
         schedule,
         (
-            (move |commands: Commands,
-                   processes: Query<(Entity, &Process)>,
-                   programs: Res<Programs>| {
-                run_programs(schedule_id, commands, processes, programs);
-            })
-            .in_set(ProcessSystems::RunPrograms),
             ApplyDeferred
                 .after(ProcessSystems::RunPrograms)
                 .before(ProcessSystems::RouteWrites),
@@ -156,7 +150,10 @@ pub(crate) fn add_process_schedule<S: ScheduleLabel + Clone>(app: &mut App, sche
     }
 }
 
-/// Registers process-management messages and runs programs across every standard schedule.
+/// Registers process-management messages and installs process I/O routing in
+/// every standard update schedule, including the fixed-timestep ones. Programs
+/// that add systems to a custom schedule install routing there.
+/// Cached descriptors survive `First` until a schedule routes pending writes.
 #[derive(Debug)]
 pub struct ProcessPlugin;
 impl Plugin for ProcessPlugin {
@@ -169,7 +166,6 @@ impl Plugin for ProcessPlugin {
             First,
             (ProcessSystems::QueueInput, ProcessSystems::Cleanup).chain(),
         );
-        app.add_systems(First, cleanup_process_io.in_set(ProcessSystems::Cleanup));
         app.register_io_msg::<Vec<u8>>();
 
         add_process_schedule(app, PreUpdate);

@@ -1,6 +1,6 @@
 use super::*;
 
-/// Processes with an unknown program or no system in the current schedule are
+/// Processes of an unregistered program, or of a program with no systems, are
 /// ignored rather than preventing the app from running.
 #[test]
 fn skips_processes_without_registered_systems() {
