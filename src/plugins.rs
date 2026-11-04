@@ -38,14 +38,14 @@ fn install_io_schedule<T: IoMessage>(app: &mut App, schedule: InternedScheduleLa
     );
 }
 
-fn add_process_input_buffer<T: IoMessage>(added: On<Add, Process>, mut commands: Commands) {
+fn add_process_input_buffer<T: IoMessage>(added: On<Add<Process>>, mut commands: Commands) {
     commands
         .entity(added.entity)
         .entry::<ProcessInputBuffer<T>>()
         .or_default();
 }
 
-fn remove_process_input_buffer<T: IoMessage>(removed: On<Remove, Process>, mut commands: Commands) {
+fn remove_process_input_buffer<T: IoMessage>(removed: On<Remove<Process>>, mut commands: Commands) {
     let process = removed.entity;
     commands.queue(move |world: &mut World| {
         if let Ok(mut process) = world.get_entity_mut(process) {

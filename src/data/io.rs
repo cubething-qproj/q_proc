@@ -147,7 +147,7 @@ pub(crate) struct EndpointClosed {
     component: TypeId,
 }
 
-fn add_endpoint_capability<T: IoComponent>(added: On<Add, T>, mut commands: Commands) {
+fn add_endpoint_capability<T: IoComponent>(added: On<Add<T>>, mut commands: Commands) {
     let component = TypeId::of::<T>();
     commands
         .entity(added.entity)
@@ -159,7 +159,7 @@ fn add_endpoint_capability<T: IoComponent>(added: On<Add, T>, mut commands: Comm
 }
 
 fn close_removed_endpoint<T: IoComponent>(
-    removed: On<Remove, T>,
+    removed: On<Remove<T>>,
     mut commands: Commands,
     mut endpoints: Query<&mut IoCapabilities>,
     mut descriptors: Query<&mut ProcessFdTable>,
